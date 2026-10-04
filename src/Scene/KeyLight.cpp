@@ -8,10 +8,9 @@ namespace SD::Scene
 {
 	namespace
 	{
-		// Parameters for the engine's own scene-light registration. Layout and the
-		// relocation IDs below are properties of the game binary; they are not
-		// exposed by CommonLibSSE, and guessing either produces a light that either
-		// does nothing or corrupts the shadow scene.
+		// Parameters for the engine's own scene-light registration. The layout and
+		// relocation IDs come from the game binary and aren't in CommonLibSSE; getting
+		// either wrong gives a light that does nothing or corrupts the shadow scene.
 		struct LightCreateParams
 		{
 			bool            dynamic{ true };
@@ -42,12 +41,8 @@ namespace SD::Scene
 
 		constexpr float kDegToRad = 0.01745329252f;
 
-		// BELOW THIS, A LAMP IS OFF RATHER THAN NEARLY OFF.
-		//
-		// A cross-fade that only approaches zero leaves every lamp any look ever
-		// used registered with the shadow scene for the rest of the conversation,
-		// contributing a hundredth of nothing and costing a full light each. The
-		// floor is what actually retires them.
+		// Below this a lamp is removed rather than kept nearly off, so lamps from
+		// earlier looks don't stay registered with the shadow scene.
 		constexpr float kFadeFloor = 0.004f;
 
 		struct LampState
@@ -91,13 +86,9 @@ namespace SD::Scene
 			return nullptr;
 		}
 
-		// Resolved late and re-resolved on demand rather than cached at Engage.
-		//
-		// The shadow scene is reached through the player's 3D, which is not
-		// reliably present the moment a conversation opens — a cell load that lands
-		// straight into dialogue is the case that breaks it. Engage used to give up
-		// permanently when that happened, and the symptom was lighting that worked
-		// everywhere except immediately after a door.
+		// Resolved on demand rather than cached at Engage. The shadow scene comes
+		// through the player's 3D, which isn't always present when a conversation
+		// opens (a cell load straight into dialogue).
 		[[nodiscard]] RE::ShadowSceneNode* EnsureScene()
 		{
 			if (sceneRoot) {
@@ -121,12 +112,9 @@ namespace SD::Scene
 
 			data.diffuse = colour;
 
-			// Ambient stays at zero, and this is still the whole trick.
-			//
-			// Ambient is applied everywhere the light reaches, so any non-zero
-			// value lifts the entire room and the lamp reads as a wash rather than
-			// as a source. Zero ambient with a bounded radius is what makes the
-			// background fall away behind the subject.
+			// Ambient stays at zero: any ambient lifts the whole room and the lamp reads
+			// as a wash. Zero ambient with a bounded radius is what lets the background
+			// fall away behind the subject.
 			data.ambient = RE::NiColor{ 0.0f, 0.0f, 0.0f };
 
 			const auto radius = static_cast<float>(a_lamp.spec.radius);
@@ -185,22 +173,13 @@ namespace SD::Scene
 		}
 
 		// One lamp's position, from the look's description plus the player's nudge.
-		//
-		// The old placement was one hardcoded rule — rotate 38 degrees, stand at
-		// 62% of the camera distance, add 46 units of height — and the 46 was the
-		// tell. A fixed world-unit lift is a different elevation on every shot
-		// size: barely above the eyeline on a master, steeply overhead on an
-		// extreme close, so one authored angle was in practice several unrelated
-		// ones. Everything here is angular and relative, which is what makes a look
-		// mean the same thing at every distance.
+		// Everything is angular and relative to the camera distance, so a look lights
+		// a master and an extreme close-up the same way.
 		[[nodiscard]] RE::NiPoint3 Place(const LampSpec& a_spec, const RE::NiPoint3& a_camera,
 			const RE::NiPoint3& a_subject, float a_distance)
 		{
-			// Bearing from the subject toward the camera, flattened.
-			//
-			// The camera's own height is deliberately discarded: a low-angle shot
-			// should not drag the whole rig under the floor with it, because a crew
-			// does not re-rig when they duck the camera.
+			// Bearing from the subject toward the camera, flattened. The camera's height
+			// is ignored, so a low-angle shot doesn't drag the rig under the floor.
 			float bx = a_camera.x - a_subject.x;
 			float by = a_camera.y - a_subject.y;
 			const float flat = std::sqrt(bx * bx + by * by);
@@ -212,8 +191,8 @@ namespace SD::Scene
 				by = 0.0f;
 			}
 
-			// Flipped with the camera's side of the eyeline so the key stays on the
-			// same side of the FRAME across a cut. See SetSide.
+			// Flipped with the camera's side of the eyeline, so the key stays on the same
+			// side of the frame across a cut. See SetSide.
 			const float side = eyelineSide < 0.0f ? -1.0f : 1.0f;
 
 			const float azimuth = static_cast<float>(a_spec.azimuth) * kDegToRad * side;
@@ -235,18 +214,11 @@ namespace SD::Scene
 				a_subject.z + vertical
 			};
 
-			// THE PLAYER'S NUDGE, IN CAMERA SPACE.
-			//
-			// `b` already points from the subject toward the camera, so it is the
-			// frame's depth axis; its perpendicular is the frame's horizontal. Both
-			// are rebuilt every frame from where the camera actually is, which is
-			// what makes "left a bit" stay left a bit through a cut instead of
-			// becoming "behind their head" the moment the conversation turns.
-			//
-			// The horizontal flips with the eyeline for the same reason the azimuth
-			// does. Without it, a nudge to frame-left on the shot becomes a nudge to
-			// frame-right on its reverse, which is exactly the swap this whole file
-			// works to avoid.
+			// The player's nudge, in camera space. `b` points from the subject to the
+			// camera (the frame's depth axis) and its perpendicular is the frame's
+			// horizontal. Rebuilt every frame from the actual camera, and flipped with the
+			// eyeline like the azimuth, so "left a bit" stays frame-left through a
+			// reverse.
 			const float px = -by * side;  // perpendicular to the camera bearing
 			const float py = bx * side;
 
@@ -266,11 +238,9 @@ namespace SD::Scene
 		colour = ColourFrom(a_red, a_green, a_blue);
 		fadeSeconds = std::clamp(a_fadeHundredths, 0, 300) / 100.0f;
 
-		// A shadow toggle cannot be applied to a light that already exists — the
-		// flag is consumed by addSceneLight and never read again — so the lamps are
-		// taken down and rebuilt on the next SetLook. Doing it here rather than
-		// silently deferring is what makes the setting honest: it takes effect in
-		// the conversation it was changed in, not the one after.
+		// The shadow flag is only read when a light is added, so the lamps are torn
+		// down and rebuilt on the next SetLook. This makes the change apply in the
+		// current conversation.
 		if (shadows != a_shadows) {
 			shadows = a_shadows;
 			for (auto& lamp : lamps) {
@@ -313,9 +283,8 @@ namespace SD::Scene
 		haveLook = false;
 		eyelineSide = 1.0f;
 
-		// Deliberately creates nothing. Which lamps exist is a property of the
-		// look, and no look is set until the conversation stages — building three
-		// lights here and retiring one a frame later is churn for nothing.
+		// Creates nothing yet: which lamps exist depends on the look, which isn't set
+		// until the conversation stages.
 		if (!EnsureScene()) {
 			Log::Warn(Log::Category::kStaging,
 				"No shadow scene yet; lamps will be placed once the player's 3D resolves."sv);
@@ -342,9 +311,8 @@ namespace SD::Scene
 			lamp.spec = LampSpec{};
 		}
 
-		// Dropped rather than kept. The node is reached through the player's 3D,
-		// which does not survive a cell change, and a stale ShadowSceneNode is a
-		// pointer into freed memory that AttachChild would happily follow.
+		// Dropped rather than kept: the node comes through the player's 3D, which
+		// doesn't survive a cell change.
 		sceneRoot = nullptr;
 	}
 
@@ -369,10 +337,8 @@ namespace SD::Scene
 							  std::clamp(static_cast<float>(spec.lamps[i].intensity) / 100.0f, 0.0f, 3.0f) :
 							  0.0f;
 
-			// A lamp arriving from nothing starts dark and fades up. Without this
-			// the first frame of a cut carries the full value, and the cross-fade
-			// only ever applies to lamps that were already lit — which is the half
-			// of the transition nobody notices missing.
+			// A lamp that didn't exist starts dark and fades up, so the cross-fade applies
+			// to new lamps too.
 			if (lamp.target > 0.0f && !lamp.node) {
 				lamp.live = 0.0f;
 			}
@@ -412,15 +378,8 @@ namespace SD::Scene
 			return;
 		}
 
-		// A CHANGE OF LOOK FADES RATHER THAN SNAPS, and not for smoothness's sake.
-		//
-		// Looks differ from each other by a lot — Hard to Edge is a key going out
-		// and a rim coming up — and a hard swap lands on the same frame as the
-		// camera change. Two large simultaneous discontinuities read as a rendering
-		// fault rather than as an edit, and the lighting is the one of the pair
-		// that has no business being noticed at all.
-		//
-		// Zero is honoured as zero: somebody who wants the snap can have it.
+		// A change of look fades rather than snaps, so it doesn't land as a second big
+		// discontinuity on the same frame as the cut. Zero fade time gives a snap.
 		const float step = fadeSeconds > 0.0f ?
 							   std::clamp(a_delta / fadeSeconds, 0.0f, 1.0f) :
 							   1.0f;

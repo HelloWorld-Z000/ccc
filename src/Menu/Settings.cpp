@@ -15,9 +15,8 @@
 
 #include <chrono>
 
-// Third-party, 11,000 lines, and not built to this project's warning level.
-// /W4 /WX would reject it outright, so it is quarantined rather than excused —
-// nothing else in the tree gets this treatment.
+// Third-party header that doesn't build at /W4 /WX, so its warnings are
+// suppressed here.
 #pragma warning(push, 0)
 #include "SKSEMenuFramework.h"
 #pragma warning(pop)
@@ -29,21 +28,12 @@ namespace SD::Menu
 		namespace MF = SKSEMenuFramework;
 		namespace Im = ImGuiMCP;
 
-		// --- THE PALETTE, AND THE BYTE ORDER THAT KEEPS CATCHING PEOPLE OUT ----
+		// --- Palette -------------------------------------------------------------
 		//
-		// The packed ImU32 overload of PushStyleColor takes **0xAABBGGRR** — alpha,
-		// then BLUE, then green, then red. Not RGBA. The two colours that were
-		// already in this file prove it: 0xFF66DD66 draws the green checkmark and
-		// only reads as green with blue at 0x66 and red at 0x66 around a green
-		// 0xDD, and 0xFF3BA0F0 draws the warning line, which is amber — R 0xF0,
-		// G 0xA0, B 0x3B — and would be a pale blue if the order were the other way.
-		//
-		// So: write the RGB you want, then reverse the three bytes.
-		//
-		// The named ImGuiCol_ constants are not reachable at this scope and the
-		// ImVec4 overload does not compile here, so the indices are written out.
-		// They are checked against the enum in SKSEMenuFramework.h, where Text is
-		// the first entry and CheckMark the nineteenth.
+		// The packed ImU32 overload of PushStyleColor takes 0xAABBGGRR (alpha, blue,
+		// green, red), not RGBA: write the RGB you want, then reverse the three bytes.
+		// The ImGuiCol_ constants aren't reachable here, so the indices are written
+		// out, matching the enum in SKSEMenuFramework.h (Text is 0, CheckMark is 18).
 		constexpr int kColText = 0;
 		constexpr int kColCheck = 18;
 		constexpr int kColButton = 21;
@@ -55,13 +45,8 @@ namespace SD::Menu
 		constexpr int kColSeparator = 27;
 		constexpr int kColTableHeaderBg = 46;
 
-		// kColTableBorderStrong and kColTableBorderLight went with the grid the
-		// Shots page used to draw. Nothing in the panel has cell borders now.
-
-		// Blue is the house colour, and 1.4 spends far less of it than 1.3 did.
-		// It marks identity — the page you are on, the rule under a heading, the
-		// one action on a panel worth pressing — and nothing else. A blue that is
-		// everywhere is not an accent, it is a background.
+		// Blue is the accent color, used for identity only: the current page, the rule
+		// under a heading, the main action on a panel.
 		constexpr std::uint32_t kBlue = 0xFFFF9C40u;      // RGB(64,156,255)  accent
 		constexpr std::uint32_t kBlueLine = 0xFFC87A32u;  // RGB(50,122,200)  rules
 		constexpr std::uint32_t kBlueDeep = 0xFF5A3C1Eu;  // RGB(30,60,90)    fills
@@ -72,24 +57,16 @@ namespace SD::Menu
 		constexpr std::uint32_t kGreen = 0xFF66DD66u;
 		constexpr std::uint32_t kAmber = 0xFF3BA0F0u;
 
-		// --- ICONS ------------------------------------------------------------
+		// --- Icons ---------------------------------------------------------------
 		//
-		// THE ATLAS IS NOT THE ONE THE TEXT IS DRAWN IN, and everything below
-		// follows from that.
+		// SKSE Menu Framework provides Font Awesome as a separate font
+		// (PushSolid/PushRegular/PushBrands) rather than glyphs merged into the text
+		// atlas, so an icon and a word can't share one string. Each icon is its own
+		// item between a push and a pop, with SameLine for the text after it.
 		//
-		// SKSE Menu Framework exposes PushSolid/PushRegular/PushBrands, which means
-		// Font Awesome is a SEPARATE font rather than glyphs merged into the
-		// default atlas. So an icon and a word cannot share one string: push the
-		// icon font over "Save" and the Latin letters have no glyphs and draw as
-		// boxes. Every icon here is therefore its own item, drawn between a push
-		// and a pop, with SameLine putting the text beside it.
-		//
-		// The codepoints are deliberately conservative — all of them are in the
-		// f000-f2ff block and all have been in Font Awesome since 4, so they are
-		// present whichever build the framework happens to ship. Nothing here is
-		// load-bearing either way: every icon sits NEXT TO the word it decorates,
-		// so a missing glyph costs a blank square and never the meaning of a
-		// control.
+		// The codepoints are all in the f000-f2ff block and date from Font Awesome 4,
+		// so they exist in whichever version the framework ships. Every icon sits next
+		// to a word anyway, so a missing glyph never hides what a control does.
 		constexpr unsigned kIconCamera = 0xf03du;    // video
 		constexpr unsigned kIconShots = 0xf008u;     // film
 		constexpr unsigned kIconScreen = 0xf26cu;    // tv
@@ -107,8 +84,8 @@ namespace SD::Menu
 		constexpr unsigned kIconLine = 0xf075u;      // comment
 		constexpr unsigned kIconHold = 0xf04bu;      // play
 
-		// Cached, because UnicodeToUtf8 builds a std::wstring_convert and a
-		// std::string every call and this runs per icon per frame.
+		// Cached: UnicodeToUtf8 builds a converter and a string per call, and this
+		// runs per icon per frame.
 		[[nodiscard]] const char* Glyph(unsigned a_codepoint)
 		{
 			static std::unordered_map<unsigned, std::string> cache;
@@ -119,24 +96,12 @@ namespace SD::Menu
 			return it->second.c_str();
 		}
 
-		// One icon, in one colour, IN A SLOT OF FIXED WIDTH, leaving the cursor on
-		// the same line so the caller's text follows it.
-		//
-		// THE SLOT IS THE WHOLE POINT. Font Awesome glyphs are not monospaced —
-		// the film reel is wide, the keyboard is wider, the clock is narrow — so
-		// drawing one and calling SameLine() started every heading at a different
-		// x. Down a page of group titles that reads as the text being loosely
-		// aligned rather than as icons of different shapes, and it was reported
-		// that way.
-		//
-		// So the advance is fixed and the glyph is padded to it, rather than the
-		// glyph deciding where the words begin. Measured in em rather than pixels,
-		// because the panel's font scale is not a constant — see Compact.
-		//
-		// Every font push here is balanced in the same statement, so no path can
-		// leave the icon font active over ordinary text. CalcTextSize is asked
-		// INSIDE the push, or it would measure the glyph in a font that has no
-		// glyph there to measure.
+		// One icon in one color, in a fixed-width slot, leaving the cursor on the same
+		// line for the text. Font Awesome glyphs aren't monospaced, so without the
+		// slot every heading's text would start at a different x. Measured in em
+		// because the panel's font scale varies (see Compact). The font push is
+		// balanced in the same statement, and CalcTextSize runs inside it so it
+		// measures the icon font.
 		void Icon(unsigned a_codepoint, std::uint32_t a_colour = kBlue)
 		{
 			const float slot = Im::GetFontSize() * 1.35f;
@@ -148,27 +113,19 @@ namespace SD::Menu
 			Im::PopStyleColor();
 			FontAwesome::Pop();
 
-			// Clamped at zero so a glyph wider than the slot costs the alignment
-			// rather than overlapping the word beside it.
+			// Clamped at zero, so a glyph wider than the slot costs alignment rather than
+			// overlapping the text.
 			const float gap = Im::GetStyle()->ItemSpacing.x;
 			Im::SameLine(0.0f, std::max(slot - width, 0.0f) + gap);
 		}
 
-		// --- DENSITY ----------------------------------------------------------
+		// --- Density -------------------------------------------------------------
 		//
-		// The panel drew at the framework's own font size and padding, which is
-		// sized for a page with a handful of controls on it. The Shots page has
-		// thirty-nine angles on it, and seven rows of them fitted on screen.
-		//
-		// Scoped rather than global, and undone in a destructor rather than at the
-		// end of each function, because every page has early returns in it and a
-		// font scale left pushed would follow the player into another mod's
-		// section. SetWindowFontScale is per-window and does not survive the reset;
-		// the style vars are a stack and are popped.
-		//
-		// 0.85 was picked by eye against the reported screenshot: about a fifth
-		// more rows per screen, and still comfortably readable at the sizes this
-		// menu is actually used at.
+		// The framework's default font size and padding only fit about seven rows of
+		// the Shots page on screen. This scales the font and tightens spacing for the
+		// duration of a page. Scoped and undone in a destructor because every page has
+		// early returns, and a leftover font scale would carry into other mods'
+		// sections.
 		constexpr float kFontScale = 0.85f;
 
 		struct Compact
@@ -177,9 +134,8 @@ namespace SD::Menu
 			{
 				Im::SetWindowFontScale(kFontScale);
 
-				// Vertical is where the density is. Horizontal is left roughly
-				// alone: the name column on the Shots page is the thing under
-				// pressure and squeezing it buys nothing.
+				// The density gain is vertical. Horizontal spacing stays roughly as is; the
+				// name column on the Shots page is already the tight one.
 				Im::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ItemSpacing, Im::ImVec2(6.0f, 3.0f));
 				Im::PushStyleVar(ImGuiMCP::ImGuiStyleVar_FramePadding, Im::ImVec2(4.0f, 2.0f));
 				Im::PushStyleVar(ImGuiMCP::ImGuiStyleVar_CellPadding, Im::ImVec2(6.0f, 2.0f));
@@ -197,19 +153,9 @@ namespace SD::Menu
 			Compact& operator=(Compact&&) = delete;
 		};
 
-		// WHAT USED TO BE HERE: BoldText, which drew a string twice a pixel apart
-		// to fake a weight the one available font does not have.
-		//
-		// It was reported, correctly, as the text being doubled. At the UI scale
-		// this panel actually runs at, one pixel is not a thicker stroke — it is a
-		// second copy of the word, offset and legible as such, and it landed on
-		// every heading and on the name of every angle that was switched on. The
-		// screenshot that came back had them ringed.
-		//
-		// There is no bold. Emphasis is COLOUR here: blue for a heading, white for
-		// something live, grey for something that is not. That is enough, it is
-		// what the rest of the panel already used alongside the fake bold, and it
-		// cannot draw twice.
+		// There's no bold font available, so emphasis is color: blue for headings,
+		// white for something live, grey for something that isn't. (Faking bold by
+		// drawing twice a pixel apart just looks doubled at this scale.)
 		void Text(std::uint32_t a_colour, const char* a_text)
 		{
 			Im::PushStyleColor(kColText, a_colour);
@@ -217,14 +163,7 @@ namespace SD::Menu
 			Im::PopStyleColor();
 		}
 
-		// The identity line at the top of a page: icon, name, and one optional
-		// grey fact about the page, on the same line.
-		//
-		// ONE LINE, and the count is part of why. The Shots page opened with a
-		// heading, a sentence explaining what angles are, a tally and a note about
-		// changes applying immediately — four lines of chrome above the thing
-		// somebody came to the page for, three of which say nothing that is not
-		// obvious from looking at it.
+		// The line at the top of a page: icon, name and an optional grey note.
 		void PageHeader(unsigned a_icon, const char* a_title, const char* a_note = nullptr)
 		{
 			Icon(a_icon, kBlue);
@@ -241,11 +180,8 @@ namespace SD::Menu
 			Im::Spacing();
 		}
 
-		// A collapsible group heading, with an icon beside it.
-		//
-		// The id is split off with ### for the same reason the shot rows do it — a
-		// heading whose visible text can ever change must not change identity, or
-		// ImGui treats it as a header it has never seen and quietly reopens it.
+		// A collapsible group heading with an icon. The ID is split off with ### so a
+		// heading whose text changes keeps its identity (and its open state).
 		[[nodiscard]] bool Group(unsigned a_icon, const char* a_title, const char* a_id,
 			bool a_open = true)
 		{
@@ -263,24 +199,12 @@ namespace SD::Menu
 			return open;
 		}
 
-		// --- THE ROW GRID -----------------------------------------------------
+		// --- Row grid ------------------------------------------------------------
 		//
-		// EVERY CONTROL ON EVERY PAGE IS ONE ROW OF THIS, and that is the whole of
-		// the 1.4 layout.
-		//
-		// WHAT USED TO BE HERE: ImGui's default label-on-the-RIGHT placement, plus
-		// SameLine at hand-picked pixel offsets wherever that was not good enough.
-		// Two things were wrong with it. The obvious one is that a settings panel
-		// whose names are down the right-hand side in a ragged column cannot be
-		// scanned. The other is that fixed offsets are only ever right for one
-		// string length, one font size and one window width — the Shots page had
-		// already been reported with a name drawn straight through the control
-		// beside it, at 210px, on somebody else's resolution.
-		//
-		// A two-column table cannot be overrun by its neighbour, reflows with the
-		// panel, and survives UI scaling, because the widths are proportions rather
-		// than pixels. The control column takes whatever is left, so a slider is as
-		// long as the window allows and no longer.
+		// Every control on every page is one row of a two-column table: the name on
+		// the left, the control on the right. A table can't be overrun by its
+		// neighbour, reflows with the panel and survives UI scaling, unlike
+		// hand-picked pixel offsets. The control column takes whatever width is left.
 		[[nodiscard]] bool BeginRows(const char* a_id)
 		{
 			constexpr auto kFlags = ImGuiMCP::ImGuiTableFlags_SizingStretchProp |
@@ -291,9 +215,8 @@ namespace SD::Menu
 				return false;
 			}
 
-			// 40/60. Wide enough for the longest name in the mod ("Return to First
-			// Person Afterwards") at one line, and not so wide that a slider loses
-			// travel it needs.
+			// 40/60: wide enough for the longest name ("Return to First Person
+			// Afterwards") on one line without starving the sliders.
 			Im::TableSetupColumn("name", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 0.40f, 1);
 			Im::TableSetupColumn("value", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 0.60f, 2);
 			return true;
@@ -305,12 +228,9 @@ namespace SD::Menu
 			Im::Spacing();
 		}
 
-		// Opens a row: the name in the left column, the cursor left in the right
-		// one with the item width already set to fill it.
-		//
-		// AlignTextToFramePadding is what makes a label sit on the centre line of
-		// the control beside it rather than on its top edge, and without it every
-		// row in the panel reads as very slightly broken.
+		// Opens a row: the name in the left column, the cursor in the right one with
+		// the item width set to fill it. AlignTextToFramePadding puts the label on the
+		// control's center line.
 		void Row(const char* a_label, bool a_stretch = true)
 		{
 			Im::TableNextRow();
@@ -323,8 +243,8 @@ namespace SD::Menu
 			}
 		}
 
-		// The (?) marker, submitted AFTER the control it belongs to has been asked
-		// its questions. See SliderRow for why that ordering is load-bearing.
+		// The (?) marker. Submitted after the control has been queried; see SliderRow
+		// for why that order matters.
 		void Help(const char* a_help)
 		{
 			if (!a_help || !*a_help) {
@@ -341,18 +261,9 @@ namespace SD::Menu
 			}
 		}
 
-		// A slider row that writes through.
-		//
-		// Every control here does three things in one place: draw, persist to
-		// SD_user.ini, and push the value live. Splitting those apart is how a
-		// settings panel ends up with a value that shows one thing, saves another
-		// and takes effect on neither.
-		//
-		// The visible label is drawn by Row() in the other column, so the widget
-		// gets a HIDDEN id built from the ini key — which is unique across the
-		// whole file by construction (Deploy.ps1 merges by key name and would
-		// otherwise carry a value into the wrong section), so it is also a
-		// guaranteed-unique ImGui id.
+		// A slider row that draws, saves to SD_user.ini and applies live in one place.
+		// The visible label is drawn by Row(), so the widget gets a hidden ID built
+		// from the ini key, which is unique across the file.
 		bool SliderRow(const char* a_label, int& a_value, int a_min, int a_max,
 			const char* a_section, const char* a_key, const char* a_format = "%d",
 			const char* a_help = nullptr)
@@ -365,49 +276,29 @@ namespace SD::Menu
 			const int before = a_value;
 			Im::SliderInt(id, &a_value, a_min, a_max, a_format);
 
-			// Both questions must be asked HERE, before another widget is
-			// submitted.
-			//
-			// Every ImGui IsItem* query refers to the most recently submitted item,
-			// and the help marker below submits one. Asking after it drew meant
-			// asking whether a piece of disabled text had just finished being
-			// edited, which is never true — so the write was unreachable and
-			// nothing ever persisted. The symptom was maddening precisely because
-			// the live apply still worked: settings held until the first
-			// conversation, then Open() re-read the unchanged file and stamped the
-			// defaults back over them.
-			//
-			// Deactivated-after-edit fires on the frame a drag ends, which is the
-			// right moment to touch the disk: once per gesture, not once per frame.
+			// Query the item here, before anything else is submitted: IsItem* refers to
+			// the most recent item, and the help marker below submits one.
+			// Deactivated-after-edit fires once when a drag ends, which is when to write
+			// the file.
 			const bool released = Im::IsItemDeactivatedAfterEdit();
 			const bool active = Im::IsItemActive();
 			const bool moved = a_value != before;
 
 			Help(a_help);
 
-			// Release is the primary trigger. The second clause is the safety net:
-			// a value that changed while the widget is NOT being dragged came from
-			// a ctrl-click entry or the keyboard, and those paths do not always
-			// produce a deactivation edge. Persistence should not rest on one flag.
-			// Neither clause can fire per-frame during a drag, which is the only
-			// case worth avoiding — a full-range drag crosses hundreds of values.
+			// Release is the main trigger. The second clause catches changes from
+			// ctrl-click entry or the keyboard, which don't always produce a deactivation
+			// edge. Neither fires every frame during a drag.
 			if (released || (moved && !active)) {
 				Config::SetInt(a_section, a_key, a_value);
 			}
 
-			// Live application keys off the frame-by-frame change, so dragging a
-			// floor is felt immediately rather than only on release.
+			// Live application uses the per-frame change, so dragging is felt immediately.
 			return moved;
 		}
 
-		// A time slider whose value reads in SECONDS inside the track.
-		//
-		// The store stays hundredths — every timing key in this mod is hundredths
-		// and changing that would be a migration for nothing — so the widget is a
-		// float over seconds and the conversion happens here. A caption saying
-		// "8.00s" beside a slider reading 800 was a whole extra row per control and
-		// a number nobody could read without it; putting the unit in the track
-		// costs nothing and removes both.
+		// A time slider that shows seconds in the track. Stored as hundredths like
+		// every other timing key; the conversion happens here.
 		bool SecondsRow(const char* a_label, int& a_hundredths, int a_min, int a_max,
 			const char* a_section, const char* a_key, const char* a_help = nullptr)
 		{
@@ -424,9 +315,8 @@ namespace SD::Menu
 			const bool released = Im::IsItemDeactivatedAfterEdit();
 			const bool active = Im::IsItemActive();
 
-			// Rounded rather than truncated, so a slider parked on 8.00 stores 800
-			// and not 799. Drift of one hundredth is invisible on screen and is
-			// exactly the sort of thing preset comparison would report forever.
+			// Rounded, not truncated, so 8.00 stores 800 rather than 799 (which preset
+			// comparison would report as drift).
 			const int rounded = std::clamp(
 				static_cast<int>(std::lround(static_cast<double>(seconds) * 100.0)), a_min, a_max);
 			const bool moved = rounded != a_hundredths;
@@ -440,17 +330,9 @@ namespace SD::Menu
 			return moved;
 		}
 
-		// A percentage row over a value stored in THOUSANDTHS of screen height.
-		//
-		// The letterbox is the only setting in the mod whose stored unit is not
-		// what anybody would say out loud. "115" means 11.5% of the frame per bar,
-		// and the old panel drew the raw number with the percentage as a caption
-		// beside it. The slider now speaks percent and the store keeps thousandths,
-		// which is the same trade SecondsRow makes.
-		//
-		// Whole percent, deliberately. Sub-percent bar height is not a thing anyone
-		// has an opinion about, and a value carried over from an older config lands
-		// on the nearest percent the first time it is touched.
+		// A percent slider over a value stored in thousandths of screen height (the
+		// letterbox: "115" means 11.5% per bar). Whole percents only; an older
+		// fractional value snaps to the nearest percent when first touched.
 		bool PercentRow(const char* a_label, int& a_thousandths, int a_maxPercent,
 			const char* a_section, const char* a_key)
 		{
@@ -474,8 +356,8 @@ namespace SD::Menu
 			return moved;
 		}
 
-		// A toggle row. The name is in the left column; the box sits at the left of
-		// the right column, where every other control on the page begins.
+		// A toggle row. The box sits at the left of the right column, where every
+		// other control starts.
 		bool ToggleRow(const char* a_label, bool& a_value, const char* a_section,
 			const char* a_key, const char* a_help = nullptr)
 		{
@@ -496,8 +378,7 @@ namespace SD::Menu
 			return changed;
 		}
 
-		// An amber note, wrapped, with a warning icon. The one thing on any page
-		// that is allowed to be a paragraph.
+		// An amber warning with an icon, wrapped.
 		void Warning(const char* a_text)
 		{
 			Icon(kIconWarning, kAmber);
@@ -506,8 +387,8 @@ namespace SD::Menu
 			Im::PopStyleColor();
 		}
 
-		// Grey metadata under a group: what a setting means for the whole section,
-		// or why it is currently doing nothing.
+		// Grey note under a group: what a setting means for the section, or why it
+		// currently does nothing.
 		void Note(const char* a_text)
 		{
 			Im::PushStyleColor(kColText, kMuted);
@@ -515,7 +396,7 @@ namespace SD::Menu
 			Im::PopStyleColor();
 		}
 
-		// ---- Camera ----------------------------------------------------------
+		// ---- Camera ------------------------------------------------------------
 
 		void __stdcall RenderCamera()
 		{
@@ -530,8 +411,7 @@ namespace SD::Menu
 				changed |= ToggleRow("Direct the Camera", dials.enabled,
 					"Direction", "bEnabled");
 
-				// Read straight off the ini rather than from Tunables: it is
-				// consulted once, in Open(), so there is nothing live to mirror.
+				// Read from the ini rather than Tunables; only Open() uses it.
 				bool restoreFirst = Config::Bool("Direction", "bRestoreFirstPerson", true);
 				static_cast<void>(ToggleRow("Return to First Person Afterwards", restoreFirst,
 					"Direction", "bRestoreFirstPerson",
@@ -543,12 +423,10 @@ namespace SD::Menu
 
 			Im::BeginDisabled(!dials.enabled);
 
-			// ---- Per Line Angle Change --------------------------------------
+			// ---- Per Line Angle Change ---------------------------------------------
 			//
-			// THE FIRST OF TWO INDEPENDENT CUT MODES. The section is collapsible
-			// and its own first row is the switch, so the heading names a feature
-			// and the row underneath says whether it is on — rather than the
-			// heading being a switch, which is a control nobody finds.
+			// The first of two independent cut modes. The group's first row is its on/off
+			// switch.
 			if (Group(kIconLine, "Per Line Angle Change", "cutLines")) {
 				Im::Indent();
 
@@ -586,7 +464,7 @@ namespace SD::Menu
 				Im::Unindent();
 			}
 
-			// ---- Reaction Shots ---------------------------------------------
+			// ---- Reaction Shots ----------------------------------------------------
 			if (Group(kIconFaces, "Reaction Shots", "cutReactions")) {
 				Im::Indent();
 
@@ -614,11 +492,49 @@ namespace SD::Menu
 				Im::Unindent();
 			}
 
-			// ---- Timed Angle Change -----------------------------------------
+			// ---- Persuasion --------------------------------------------------------
+			if (Group(kIconLine, "Persuasion", "cutPersuasion", false)) {
+				Im::Indent();
+				if (BeginRows("cutPersuasionGrid")) {
+					changed |= ToggleRow("Hold On Their Answer", dials.persuasionBeat,
+						"Direction", "bPersuasionBeat",
+						"When you persuade, intimidate or bribe, their answer gets a close-up "
+						"of them, held for the whole reply while the camera pushes in slowly.");
+					EndRows();
+				}
+				Im::Unindent();
+			}
+
+			// ---- Other People's Conversations --------------------------------------
 			//
-			// THE SECOND MODE, AND IT IS GENUINELY INDEPENDENT OF THE FIRST. Off on
-			// both halves of the exchange by default, which makes every cut in the
-			// mod a motivated one.
+			// The key is on the Keys page and always works; only the automatic mode is set
+			// here.
+			if (Group(kIconShots, "Other People's Conversations", "cutScenes", false)) {
+				Im::Indent();
+				if (BeginRows("cutScenesGrid")) {
+					changed |= ToggleRow("Film When You Stand Still", dials.sceneAuto,
+						"Direction", "bFilmScenesAuto",
+						"Two NPCs talking to each other in front of you are filmed like a "
+						"conversation of your own once you have stood still nearby for a "
+						"moment. Moving hands the camera back.");
+					EndRows();
+				}
+				Im::BeginDisabled(!dials.sceneAuto);
+				if (BeginRows("cutScenesDials")) {
+					changed |= SliderRow("Within", dials.sceneRange, 150, 2000,
+						"Direction", "iSceneRange", "%d units");
+					changed |= SecondsRow("Stand Still For", dials.sceneWait, 0, 600,
+						"Direction", "iSceneWait");
+					EndRows();
+				}
+				Im::EndDisabled();
+				Note("The Film Their Conversation key on the Keys page works with this off.");
+				Im::Unindent();
+			}
+
+			// ---- Timed Angle Change ------------------------------------------------
+			//
+			// The second cut mode, independent of the first. Off on both sides by default.
 			const bool anyTimer = dials.timedCutsWhileSpeaking || dials.timedCutsWhileChoosing;
 
 			if (Group(kIconTimer, "Timed Angle Change", "cutTimed")) {
@@ -632,9 +548,7 @@ namespace SD::Menu
 					EndRows();
 				}
 
-				// The one control the timers own. Disabled with them, because a
-				// duration for a timer that cannot fire is a live-looking control
-				// that does nothing.
+				// Disabled when neither timer is on, since the duration would do nothing.
 				Im::BeginDisabled(!anyTimer);
 				if (BeginRows("cutTimedDials")) {
 					changed |= SecondsRow("Change After", dials.maxShotTime, 100, 2000,
@@ -650,13 +564,10 @@ namespace SD::Menu
 				Im::Unindent();
 			}
 
-			// ---- Holds -------------------------------------------------------
+			// ---- Holds -------------------------------------------------------------
 			//
-			// SAFETY FLOORS, NOT A CUT MODE, and that is why they are their own
-			// group rather than living under the timers. Every cut in the mod is
-			// gated by these during normal pacing, so greying them out with
-			// the timers would hide the controls that decide how the line-based
-			// mode feels.
+			// Safety floors rather than a cut mode, so they're a separate group: they gate
+			// every cut, including the line-based ones.
 			if (Group(kIconHold, "Holds", "cutHolds", false)) {
 				Im::Indent();
 				if (BeginRows("cutHoldsGrid")) {
@@ -679,7 +590,7 @@ namespace SD::Menu
 				Im::Unindent();
 			}
 
-			// ---- Framing -----------------------------------------------------
+			// ---- Framing -----------------------------------------------------------
 			if (Group(kIconCamera, "Framing", "cutFraming", false)) {
 				Im::Indent();
 				if (BeginRows("cutFramingGrid")) {
@@ -716,10 +627,8 @@ namespace SD::Menu
 						"actors and takes over this setting while enabled.");
 					Im::EndDisabled();
 
-					// THE 180-DEGREE RULE. It is a real piece of film grammar with
-					// a real consequence, and it is the one control here whose name
-					// cannot explain itself to somebody who has not met it.
-					// True 180 depends on Never Cross, so it turns it on and locks it.
+					// The 180-degree rule. True 180 depends on Never Cross, so it turns that on
+					// and locks it.
 					if (ToggleRow("True 180 Rule", dials.true180,
 						"Direction", "bTrue180",
 						"Films you over one shoulder and them over the opposite one, so the "
@@ -739,6 +648,13 @@ namespace SD::Menu
 						"it looks for room. Reverse shots can still land on the far side; "
 						"True 180 Rule fixes that.");
 					Im::EndDisabled();
+
+					changed |= ToggleRow("Close-Ups Follow The Face", dials.followFace,
+						"Direction", "bFollowFace",
+						"Close-ups stay anchored to the person but frame the face their head "
+						"is actually carrying: lower and further forward when they lean over "
+						"something, and from the side the face is turned toward. Decided when "
+						"the shot cuts, so it never swings mid-shot.");
 
 					if (ToggleRow("Ignore Obstructions Mid-Shot", dials.holdPlacement,
 						"Direction", "bHoldPlacement",
@@ -769,7 +685,7 @@ namespace SD::Menu
 			}
 		}
 
-		// ---- Screen ----------------------------------------------------------
+		// ---- Screen ------------------------------------------------------------
 
 		void __stdcall RenderScreen()
 		{
@@ -783,19 +699,9 @@ namespace SD::Menu
 			if (Group(kIconScreen, "Black Bars", "screenBars")) {
 				Im::Indent();
 				if (BeginRows("screenBarsGrid")) {
-					// TWO WAYS TO SAY OFF, AND ONE OF THEM USED TO WIN SILENTLY.
-					//
-					// Before 1.4 the only letterbox control was the height, so
-					// "I don't want bars" was expressed by dragging it to zero.
-					// 1.4 added the switch the setting always needed — and left
-					// anybody who had done that with a switch that does nothing
-					// when they tick it, because bars of zero height are invisible
-					// however the switch is set.
-					//
-					// Turning the feature ON therefore gives it a height to have.
-					// Only from zero, and only on the tick: a height somebody
-					// deliberately set is never overwritten, and neither is a zero
-					// they are looking straight at with the switch already on.
+					// Before the switch existed, "no bars" meant dragging the height to zero.
+					// Turning the switch on from a zero height gives it a default height; a height
+					// someone set deliberately is never overwritten.
 					if (ToggleRow("Black Bars", dials.letterbox,
 							"Direction", "bLetterbox")) {
 						changed = true;
@@ -815,6 +721,11 @@ namespace SD::Menu
 					Im::BeginDisabled(!dials.letterbox);
 					changed |= PercentRow("Bar Height", dials.letterboxHeight, 30,
 						"Direction", "iLetterboxHeight");
+					changed |= ToggleRow("Subtitles In The Black Bar", dials.subtitlesInBar,
+						"Direction", "bSubtitlesInBar",
+						"The line being spoken sits centred in the bottom bar and follows it. "
+						"With no bar, or one too thin for the lines, it goes back over the "
+						"picture.");
 					Im::EndDisabled();
 
 					EndRows();
@@ -861,8 +772,8 @@ namespace SD::Menu
 			}
 		}
 
-		// ---- Faces -----------------------------------------------------------
-		// Coordinated expressions and independent mouth fallback.
+		// ---- Faces -------------------------------------------------------------
+		// Expressions and the independent mouth fallback.
 		void __stdcall RenderFaces()
 		{
 			const Compact compact;
@@ -908,9 +819,7 @@ namespace SD::Menu
 					EndRows();
 				}
 
-				// SHOWN ONLY WHILE IT IS ON, because a warning about a feature
-				// nobody has enabled is noise on a page they came to for something
-				// else.
+				// Only shown while the option is on.
 				if (synth) {
 					Warning("For DBVO 1 or DBVO 2 only. Dragonborn ReVoiced is the better "
 							"choice and drives your mouth itself \xe2\x80\x94 running both means "
@@ -925,24 +834,39 @@ namespace SD::Menu
 				Im::Unindent();
 			}
 
+			if (Group(kIconFaces, "Body", "faceBody")) {
+				Im::Indent();
+				auto dials = Camera::Director::GetTunables();
+				bool changed = false;
+				if (BeginRows("faceBodyRows")) {
+					changed |= ToggleRow("Your Gestures Start With Your Line", dials.playerGestureCue,
+						"Performance", "bPlayerGestureCue",
+						"Sends the PlayDBVOTopic event when your voiced line starts, so a "
+						"DBVO player-gesture add-on gestures while you speak. Not sent while "
+						"DBVO 1 is loaded; it sends its own.");
+					changed |= ToggleRow("They Stop Working To Talk", dials.stopWorkToTalk,
+						"Performance", "bStopWorkToTalk",
+						"Somebody at a workbench, smelter, forge or tanning rack steps away "
+						"from it 3 to 5 seconds after they start talking. Seats, beds and "
+						"quest scenes are left alone.");
+					EndRows();
+				}
+				if (changed) {
+					Camera::Director::ApplyTunables(dials);
+				}
+				Im::Unindent();
+			}
+
 			Note("Brow and squint poses are part of each expression profile, not a separate speech effect. "
 				"Strength is automatically capped and tuned for cinematic acting. Edit Expression.* sections in SD_user.ini to customize profiles. Mouth lip sync stays independent.");
 		}
 
-		// ---- Keys ------------------------------------------------------------
+		// ---- Keys --------------------------------------------------------------
 
-		// ANY KEY, CAPTURED FROM THE GAME'S OWN INPUT.
-		//
-		// This was a dropdown of about forty hand-picked keys, which is a worse
-		// control for one honest reason and one dishonest one. The honest one: no
-		// list is ever the key somebody wanted. The dishonest one: the list existed
-		// because reading the keyboard through ImGui needs a translation table
-		// between its key enum and the DirectX scan codes the game reports, and
-		// that table is wrong in exactly the places nobody tests.
-		//
-		// Capturing from the game's OWN input stream sidesteps the translation
-		// entirely — whatever the sink records is by construction the code that
-		// will later match. See Hotkeys.h.
+		// Any key, captured from the game's own input. Reading the keyboard through
+		// ImGui would need a translation table between its key enum and the game's
+		// DirectX scan codes; capturing from the game's input stream records exactly
+		// the code that will match later. See Hotkeys.h.
 		using Action = Core::Hotkeys::Action;
 
 		void KeyRow(const char* a_label, Action a_action)
@@ -989,19 +913,10 @@ namespace SD::Menu
 			Im::PopID();
 		}
 
-		// THE FRAMEWORK'S OWN INPUT ROUTE, AND WHY THE GAME'S IS NOT ENOUGH.
-		//
-		// A capture widget lives inside the settings menu, and while that menu is
-		// open the framework is intercepting input to drive ImGui. Relying on the
-		// game's own event sink to see the binding press is therefore relying on
-		// exactly the case least likely to hold — a control that would work
-		// everywhere except where it is used.
-		//
-		// Returns false unconditionally: this observes, it does not claim the
-		// press. What "true" means to the framework is not documented here, and
-		// guessing at consume semantics is how the removed dialogue handler's whole
-		// class of bug started. OfferKey is idempotent, so a key arriving by both
-		// routes is taken once.
+		// The framework's input route. While this menu is open the framework takes
+		// input to drive ImGui, so the game's own sink may not see the binding press.
+		// Returns false: this observes and doesn't claim the press. OfferKey is
+		// idempotent, so a key arriving by both routes is taken once.
 		bool __stdcall OnMenuInput(RE::InputEvent* a_event)
 		{
 			if (!a_event || !Core::Hotkeys::Capturing()) {
@@ -1024,8 +939,7 @@ namespace SD::Menu
 		{
 			const Compact compact;
 
-			// Polled here rather than in the input sink, because binding writes the
-			// ini and the input thread is not where a file write belongs.
+			// Polled here rather than in the input sink, because binding writes the ini.
 			Core::Hotkeys::PollCapture();
 
 			PageHeader(kIconKeys, "KEYS");
@@ -1033,6 +947,7 @@ namespace SD::Menu
 			if (BeginRows("keyGrid")) {
 				KeyRow("Next Angle", Action::kNextAngle);
 				KeyRow("Who To Look At", Action::kFraming);
+				KeyRow("Film Their Conversation", Action::kFilmScene);
 				EndRows();
 			}
 
@@ -1041,6 +956,9 @@ namespace SD::Menu
 
 			if (!Camera::Director::Staging()) {
 				Note("Not in a conversation.");
+			} else if (Camera::Director::FilmingScene()) {
+				Icon(kIconCheck, kGreen);
+				Im::Text("Filming their conversation.");
 			} else {
 				const auto label = Camera::FramingLabel(Camera::Director::CurrentFraming());
 				Icon(kIconCheck, kGreen);
@@ -1048,13 +966,12 @@ namespace SD::Menu
 			}
 		}
 
-		// ---- Shots -----------------------------------------------------------
+		// ---- Shots -------------------------------------------------------------
 
 		using Camera::ShotType;
 
-		// The three pools, in the order they read rather than the order they are
-		// declared. Shoulder shots first in each because they are the staples and
-		// the ones anybody looking at this page came to find.
+		// The three pools, in reading order. Shoulder shots first in each, since
+		// they're the staples.
 		constexpr std::array kNpcShots{
 			ShotType::kOverPlayerShoulder,
 			ShotType::kOverPlayerShoulderLow,
@@ -1103,29 +1020,20 @@ namespace SD::Menu
 			ShotType::kDistantLow,
 		};
 
-		// A shot missing from all three lists is a shot the player can never
-		// switch off, and nothing at runtime would ever say so. Adding one to the
-		// enum without adding it here now fails the build instead.
+		// A shot missing from all three lists couldn't be switched off, so adding one
+		// to the enum without listing it here fails the build.
 		static_assert(
 			kNpcShots.size() + kPlayerShots.size() + kRoomShots.size() ==
 				static_cast<std::size_t>(ShotType::kCount),
 			"Every shot must appear on the Shots page, or it cannot be turned off.");
 
-		// THE INERT PAIR A SETUP WITH NO EFFECT CARRIES.
-		//
-		// Amount and Duration mean nothing on a locked setup — nothing moves, over
-		// any duration — so the panel hides them. What it must NOT do is leave
-		// whatever they happened to hold, because preset comparison reads both
-		// whether or not the move uses them: two setups both showing "None" would
-		// then report different drift, and a preset would stop recognising itself
-		// for a reason with nothing on screen to explain it.
-		//
-		// These are the same numbers the built-in looks write for a locked setup.
+		// Values a locked setup gets for the amount and duration it doesn't use.
+		// They're hidden in the panel, but preset comparison still reads them, so
+		// they're set to the same values the built-in looks write.
 		constexpr int kInertAmount = 0;
 		constexpr int kInertTime = 400;
 
-		// The moves, ordered as the enum is, because that ordering is the ini's
-		// storage format — see the note on Move.
+		// The moves in enum order, which is the ini storage format (see Move).
 		constexpr std::array kMoves{
 			Camera::Move::kLocked, Camera::Move::kPushIn, Camera::Move::kPullOut,
 			Camera::Move::kCraneUp, Camera::Move::kCraneDown,
@@ -1136,8 +1044,7 @@ namespace SD::Menu
 			Camera::Move::kTruckLeft, Camera::Move::kTruckRight,
 		};
 
-		// "None" rather than "Locked Off" for the no-move entry. Everything else
-		// keeps the name the shot table gives it.
+		// "None" for the no-move entry; everything else uses the shot table's name.
 		[[nodiscard]] const char* EffectLabel(Camera::Move a_move)
 		{
 			return a_move == Camera::Move::kLocked ? "None" : Camera::MoveLabel(a_move).data();
@@ -1148,7 +1055,7 @@ namespace SD::Menu
 			Camera::Shot::SetMove(a_type, a_move);
 			Config::SetInt("Shots", Camera::MoveKey(a_type), static_cast<int>(a_move));
 
-			// Choosing None settles the two dials it hides. See kInertAmount.
+			// Choosing None also resets the two hidden values. See kInertAmount.
 			if (a_move == Camera::Move::kLocked) {
 				Camera::Shot::SetMoveAmount(a_type, kInertAmount);
 				Camera::Shot::SetMoveTime(a_type, kInertTime);
@@ -1157,8 +1064,7 @@ namespace SD::Menu
 			}
 		}
 
-		// The editor. Everything about one angle, in a window that is not competing
-		// with thirty-eight others for height.
+		// The per-angle editor popup.
 		void ShotEditor(ShotType a_type)
 		{
 			Im::SetNextWindowSize(ImGuiMCP::ImVec2{ 460.0f, 0.0f });
@@ -1166,19 +1072,9 @@ namespace SD::Menu
 				return;
 			}
 
-			// A POPUP IS ITS OWN WINDOW, and the font scale is per-window.
-			//
-			// The style vars the page pushed are on a global stack and reach in
-			// here already; the scale does not, so without this the editor would
-			// open at full size over a panel drawn at 0.85 and read as a different
-			// mod's dialog.
-			//
-			// SET RATHER THAN SCOPED, deliberately. Compact resets the scale in its
-			// destructor, which here would run after EndPopup — by which point the
-			// current window is the PANEL again, so the guard would helpfully undo
-			// the page's own scale halfway down the page. A popup window is this
-			// mod's alone and nothing else ever draws into it, so there is nothing
-			// to hand back.
+			// A popup is its own window and the font scale is per window, so set it here.
+			// Not scoped: Compact's destructor would run after EndPopup and reset the
+			// panel's scale instead.
 			Im::SetWindowFontScale(kFontScale);
 
 			const auto name = Camera::Name(a_type);
@@ -1213,13 +1109,7 @@ namespace SD::Menu
 					Im::EndCombo();
 				}
 
-				// HIDDEN RATHER THAN GREYED, and that is a change from 1.3.
-				//
-				// The old panel disabled them, on the argument that a control which
-				// vanishes takes the explanation of why with it. True in general
-				// and wrong here: the explanation is one word and it is already on
-				// screen, in the row above, reading "None". Two dead rows under it
-				// are just clutter on the densest popup in the mod.
+				// Hidden rather than greyed out; the row above already says "None".
 				if (current != Camera::Move::kLocked) {
 					int amount = Camera::Shot::MoveAmount(a_type);
 					if (SliderRow("Amount", amount, 0, 100, "Shots",
@@ -1234,18 +1124,14 @@ namespace SD::Menu
 					}
 				}
 
-				// "FOV" rather than "Lens". The unit is degrees of field of view and
-				// the 1.4 panel names controls after their unit wherever one exists,
-				// so the number in the track can be read without a caption.
+				// "FOV", after the unit, so the number in the track needs no caption.
 				if (SliderRow("FOV", lens, Camera::kMinLens, Camera::kMaxLens, "Shots",
 						Camera::LensKey(a_type), "%d\xc2\xb0")) {
 					Camera::Shot::SetLens(a_type, lens);
 				}
 
-				// "Frequency" rather than "Weight". The number is a weight and
-				// behaves like one, but nobody outside the code has to know that:
-				// what they need to know is that doubling it doubles how often the
-				// angle comes up.
+				// "Frequency" rather than "Weight": doubling it doubles how often the angle
+				// comes up.
 				if (SliderRow("Frequency", weight, 0, 100, "Shots",
 						Camera::WeightKey(a_type), weight == 0 ? "never" : "%d")) {
 					Camera::Shot::SetWeight(a_type, weight);
@@ -1254,10 +1140,7 @@ namespace SD::Menu
 				EndRows();
 			}
 
-			// Lighting, only where it can do anything. The Light page is gone for
-			// 1.4 and these are reachable only by hand-setting [Lighting] bPerShot,
-			// which is what keeps the experimental rig available without putting a
-			// question to somebody who never asked it.
+			// Per-angle lighting, only shown with [Lighting] bPerShot=1 set by hand.
 			if (Config::Bool("Lighting", "bPerShot", false)) {
 				Im::Spacing();
 				Im::SeparatorText("Light");
@@ -1311,14 +1194,9 @@ namespace SD::Menu
 				}
 			}
 
-			// ONE DEFAULT PER ANGLE, and it appears only when there is something to
-			// undo.
-			//
-			// Deliberately does NOT touch the on/off. Somebody who has switched off
-			// thirty-three angles to build a look has made the most expensive
-			// decision on this page, and a button labelled Default that undid it on
-			// a misclick would be unforgivable. Turning an angle back on is one tick
-			// and is nobody's accident.
+			// A Default button per angle, shown only when there's something to undo. It
+			// doesn't touch the on/off switch, so a misclick can't undo someone's angle
+			// selection.
 			const auto authoredMove = Camera::Shot::AuthoredMove(a_type);
 			const int  authoredAmount = Camera::Shot::AuthoredMoveAmount(a_type);
 			const int  authoredTime = Camera::Shot::AuthoredMoveTime(a_type);
@@ -1356,43 +1234,16 @@ namespace SD::Menu
 			Im::EndPopup();
 		}
 
-		// How many cells one angle occupies. Declared once, because three places
-		// have to agree: the setup, the fill, and the blank half of an odd row.
+		// Cells per angle. Used by the column setup, the fill and the blank half of an
+		// odd row.
 		constexpr int kShotColumns = 4;
 
-		// FOUR COLUMNS, DOWN FROM SIX, AND THE TWO THAT WENT WERE THE TWO NOBODY
-		// SCANS FOR.
+		// Four columns per angle (on, name, frequency, edit), two angles per row. FOV
+		// and the move live in the editor.
 		//
-		// Six columns twice over is twelve, and twelve does not fit: the reported
-		// screenshot has the header reading "Wei..." and a value reading
-		// "locked of", which is a table telling you it has run out of room. The
-		// answer is fewer columns rather than smaller text.
-		//
-		// FOV went first. It is a number between 20 and 150 that means something
-		// only next to the angle's fill, which is not on the row either, so on its
-		// own it was decoration. Effect went with it: "Push in" and "Zoom out" are
-		// what an angle DOES once it is chosen, which is a tuning question, and
-		// tuning happens in the editor one click away.
-		//
-		// What is left is what somebody actually reads a list of thirty-nine
-		// angles for: which ones are on, what they are called, and how often each
-		// comes up. Everything else is still one click away and now has room to be
-		// laid out properly when it gets there.
-		//
-		// The user_id argument is not decoration. Column identity is hashed from
-		// the label, and "On" appearing twice in one table is two columns claiming
-		// one id; giving each its own number keeps them apart.
-		// MEASURED, NOT GUESSED, and the guesses are why this needed fixing twice.
-		//
-		// 26 pixels for the checkbox and 68 for "Frequency" were right at one font
-		// size and one cell padding, and both changed underneath them: the reported
-		// screenshot has a checkbox clipped by its own column and a header reading
-		// "Freque...". A fixed width in pixels is a bet on a font the panel does
-		// not promise, and the panel now scales its own font as well.
-		//
-		// So each column asks for exactly what it holds. A checkbox is square and
-		// its side is the frame height; a header is as wide as its text; a button
-		// is its label plus its frame. All three move together when the scale does.
+		// Column widths are measured from the current font and padding rather than
+		// fixed pixels, since the panel scales its font. The user_id argument keeps
+		// the two "On" columns from sharing an ID.
 		void SetupShotColumns(int a_half)
 		{
 			constexpr auto kFixed = ImGuiMCP::ImGuiTableColumnFlags_WidthFixed;
@@ -1407,11 +1258,7 @@ namespace SD::Menu
 			const float cell = style->CellPadding.x * 2.0f;
 			const float frame = style->FramePadding.x * 2.0f;
 
-			// A pixel or two of slack on top of the exact fit. A checkbox is
-			// exactly GetFrameHeight() square and a button is exactly its text plus
-			// its padding, so an exact column is one rounding error away from
-			// clipping the thing it was measured for — which is precisely how the
-			// tick came back cut off.
+			// A few pixels of slack: an exact fit is one rounding error from clipping.
 			constexpr float kSlack = 4.0f;
 
 			const float onWidth = Im::GetFrameHeight() + cell + kSlack;
@@ -1424,7 +1271,7 @@ namespace SD::Menu
 			Im::TableSetupColumn("", kFixed | kNoHeader, editWidth, id(4));
 		}
 
-		// One angle, filling the next four cells wherever the cursor happens to be.
+		// One angle, filling the next four cells.
 		void ShotCells(ShotType a_type)
 		{
 			Im::PushID(static_cast<int>(a_type));
@@ -1432,8 +1279,8 @@ namespace SD::Menu
 			bool      on = Camera::Shot::Enabled(a_type);
 			const int weight = Camera::Shot::Weight(a_type);
 
-			// An angle that is switched on but weighted to never is not in play, and
-			// the header count has always said so. The name says so too.
+			// An angle that's on but weighted to zero isn't in play; the name shows that,
+			// as does the header count.
 			const bool live = on && weight > 0;
 
 			Im::TableNextColumn();
@@ -1444,12 +1291,7 @@ namespace SD::Menu
 			}
 			Im::PopStyleColor();
 
-			// WHITE IF IT IS IN PLAY, GREY IF IT IS NOT, and nothing else.
-			//
-			// This was the fake bold, and it was the doubled text in the report.
-			// The tinted cell behind it went at the same time: with row striping
-			// underneath, a blue wash on some cells and not others made the list
-			// read as a spreadsheet somebody had been highlighting in.
+			// White if it's in play, grey if not.
 			Im::TableNextColumn();
 			Im::AlignTextToFramePadding();
 			const auto name = Camera::Name(a_type);
@@ -1457,7 +1299,7 @@ namespace SD::Menu
 			std::snprintf(label, sizeof(label), "%.*s", static_cast<int>(name.size()), name.data());
 			Text(live ? kTextOn : kTextOff, label);
 
-			// HOW OFTEN, which is the one number worth having on the row.
+			// How often it comes up.
 			Im::TableNextColumn();
 			Im::AlignTextToFramePadding();
 			if (weight == 0) {
@@ -1475,16 +1317,13 @@ namespace SD::Menu
 			}
 			Im::PopStyleColor(3);
 
-			// Submitted inside the same PushID, so every angle's popup is its own.
-			// A popup is drawn at window level, so being inside a cell costs it
-			// nothing.
+			// Inside the same PushID, so each angle has its own popup.
 			ShotEditor(a_type);
 
 			Im::PopID();
 		}
 
-		// The cells an absent angle leaves behind, when a group has an odd count
-		// and the last row is half empty.
+		// Blank cells for the empty half of the last row in an odd-sized group.
 		void EmptyShotCells()
 		{
 			for (int i = 0; i < kShotColumns; ++i) {
@@ -1535,11 +1374,8 @@ namespace SD::Menu
 
 			Im::PushID(a_id);
 
-			// AN EMPTY GROUP IS A REAL FAILURE, not a preference, and nothing said
-			// so. The picker draws from these three pools by side of the
-			// conversation. Empty one and there is nothing for it to return for
-			// that half, so the camera falls through to the emergency single for
-			// every line of it.
+			// An empty group means the camera has nothing to draw for that side of the
+			// conversation and falls back to the emergency single, so say so.
 			if (on == 0) {
 				Warning(a_empty);
 			}
@@ -1556,18 +1392,7 @@ namespace SD::Menu
 			}
 			Im::PopStyleColor(3);
 
-			// STRIPES, NOT A GRID.
-			//
-			// This drew a full border around every one of twelve cells per row, in
-			// blue, over a blue-tinted background on the cells that were live, under
-			// blue header text. It read as a spreadsheet somebody had been
-			// highlighting in, and it was the other half of "I don't like how the
-			// table system looks".
-			//
-			// Row striping does the whole of the job a grid was doing — it keeps the
-			// eye on one row across the width — and draws nothing between columns,
-			// which is what makes a list of names read as a list rather than as
-			// cells. The one line kept is the rule under the header.
+			// Row stripes instead of a full grid, with a single rule under the header.
 			constexpr auto kTableFlags = ImGuiMCP::ImGuiTableFlags_RowBg |
 			                             ImGuiMCP::ImGuiTableFlags_NoSavedSettings |
 			                             ImGuiMCP::ImGuiTableFlags_SizingFixedFit |
@@ -1575,14 +1400,8 @@ namespace SD::Menu
 
 			Im::Spacing();
 
-			// Grey rather than blue. The header names four columns; it is not a
-			// heading, and the accent belongs to the group title above it.
+			// Grey header rather than blue; the accent belongs to the group title.
 			Im::PushStyleColor(kColTableHeaderBg, 0x00000000u);
-
-			// The cell padding this table used to push for itself is gone: Compact
-			// sets it for the whole page, and a second opinion here is how the
-			// checkbox column came to be measured against one padding and drawn
-			// under another.
 
 			if (Im::BeginTable("angles", kShotColumns * 2, kTableFlags)) {
 				SetupShotColumns(0);
@@ -1601,9 +1420,7 @@ namespace SD::Menu
 					if (i + 1 < count) {
 						ShotCells(a_shots[i + 1]);
 					} else {
-						// An odd group leaves the right half of the last row empty.
-						// The cells are still submitted so the stripe runs the full
-						// width rather than stopping halfway.
+						// Submit the empty cells so the stripe runs the full width.
 						EmptyShotCells();
 					}
 				}
@@ -1624,13 +1441,7 @@ namespace SD::Menu
 			const int total = static_cast<int>(
 				kNpcShots.size() + kPlayerShots.size() + kRoomShots.size());
 
-			// ONE LINE, WHERE THERE WERE FOUR.
-			//
-			// A heading, a sentence saying angles are things the camera can choose
-			// from, a tally, and a note that changes apply immediately — three of
-			// which are either obvious from looking at the page or true of every
-			// page in the panel. The tally is the only one that says anything, so
-			// it rides on the heading.
+			// The tally rides on the page heading.
 			char tally[64]{};
 			std::snprintf(tally, sizeof(tally), "%d of %d in play", on, total);
 			PageHeader(kIconShots, "SHOTS", tally);
@@ -1647,31 +1458,23 @@ namespace SD::Menu
 				"conversation - the camera will simply stay on faces.");
 		}
 
-		// ---- Presets ---------------------------------------------------------
+		// ---- Presets -----------------------------------------------------------
 
-		// A cached answer to "which preset am I on, and how far from each one".
-		//
-		// This page was unusable without it. One drift number is fifty-four profile
-		// reads — ten dials plus every shot key — and each of those is a file
-		// operation that Mod Organizer's virtual filesystem hooks. Working out the
-		// active preset means doing that for all of them, and the list then did it
-		// AGAIN per row: comfortably over a thousand file syscalls every frame the
-		// page was open, at sixty frames a second.
-		//
-		// Refreshed on a timer rather than once, because SD.ini is editable from
-		// outside the game and a stale "Current:" line would be a lie rather than
-		// merely old.
+		// Cached answer to "which preset is active, and how far is each one". One
+		// drift value is around fifty profile reads, each a file operation that MO2's
+		// virtual filesystem hooks; doing that per row per frame was over a thousand
+		// syscalls a frame. Refreshed on a timer, since SD.ini can be edited outside
+		// the game.
 		struct PresetState
 		{
 			const Camera::Preset*                 active{ nullptr };
 			int                                   activeSlot{ -1 };
+			int                                   activeInstalled{ -1 };
 			std::size_t                           count{ 0 };
 			std::chrono::steady_clock::time_point taken{};
 			bool                                  valid{ false };
 
-			// Cached with everything else, and for the same reason. Reading a slot
-			// is two profile reads, and the rows below asked for all three every
-			// frame the page was open.
+			// Cached for the same reason; each slot is two profile reads.
 			std::array<Camera::CustomSlot, Camera::kCustomSlots> slots{};
 		};
 
@@ -1689,9 +1492,7 @@ namespace SD::Menu
 			presetState.count = presets.size();
 			presetState.active = nullptr;
 
-			// Stops at the first exact match. Two presets cannot both be running,
-			// and the ones after it would only be asked a question whose answer
-			// cannot change the outcome.
+			// Stops at the first exact match; two presets can't both be active.
 			for (std::size_t i = 0; i < presetState.count; ++i) {
 				if (Camera::PresetDrift(presets[i]) == 0) {
 					presetState.active = &presets[i];
@@ -1703,12 +1504,19 @@ namespace SD::Menu
 				presetState.slots[static_cast<std::size_t>(i)] = Camera::ReadCustomSlot(i);
 			}
 
-			// Asked after the built-ins, and it OUTRANKS them. A saved slot can
-			// hold the same settings as a built-in look — most obviously right
-			// after somebody applies one and saves it — and both would then answer
-			// "this is what is running".
+			// Preset files are compared against live state like the built-ins, so
+			// they're cheap; the folder itself is only re-read every few seconds.
+			Camera::RescanPresetFiles(false);
+			presetState.activeInstalled = Camera::ActiveInstalledPreset();
+
+			// Checked after the built-ins and takes precedence: a saved slot or an
+			// exported file can hold the same settings as a built-in (right after
+			// applying one and saving it). Only one row is ever ticked.
 			presetState.activeSlot = Camera::ActiveCustomSlot();
 			if (presetState.activeSlot >= 0) {
+				presetState.active = nullptr;
+				presetState.activeInstalled = -1;
+			} else if (presetState.activeInstalled >= 0) {
 				presetState.active = nullptr;
 			}
 
@@ -1716,23 +1524,17 @@ namespace SD::Menu
 			presetState.valid = true;
 		}
 
-		// Your own saved looks.
-		//
-		// Kept visibly apart from the built-ins, and that is a claim about what
-		// they are rather than decoration. A built-in look is a designed vocabulary
-		// - a shot list chosen to go together, with an effect given to each one for
-		// a reason. A slot is a photograph of your settings.
+		// The player's own saved looks, kept separate from the built-ins: a built-in
+		// is a designed set of shots, a slot is a snapshot of settings.
 		void RenderCustomSlots()
 		{
-			// The rename buffers live across frames because InputText edits in
-			// place. One per slot, or typing in the second would rewrite the first.
+			// One rename buffer per slot; InputText edits in place.
 			static std::array<std::array<char, 40>, Camera::kCustomSlots> nameBuf{};
 			static bool                                                   primed = false;
 
 			Im::Spacing();
 
-			// Gold marks a slot that holds something, against the green that marks
-			// the one you are actually on.
+			// Gold marks a slot that holds something; green marks the active one.
 			constexpr unsigned kSlotGold = 0xFF4FC4E8u;
 
 			Im::PushStyleColor(kColText, kSlotGold);
@@ -1794,10 +1596,7 @@ namespace SD::Menu
 						Icon(kIconRename, kMuted);
 						Im::SetNextItemWidth(220.0f);
 						if (Im::InputText("Name", nameBuf[idx].data(), nameBuf[idx].size())) {
-							// Renames on every keystroke rather than behind a
-							// button. A Save button next to a text box is a thing
-							// people walk away from without pressing, and the cost
-							// of being wrong here is one ini write.
+							// Renamed on every keystroke rather than behind a Save button.
 							Camera::RenameCustomSlot(i, nameBuf[idx].data());
 						}
 					} else {
@@ -1825,6 +1624,132 @@ namespace SD::Menu
 			primed = true;
 		}
 
+		// Preset files, which is how presets get shared: exported below, or someone
+		// else's installed as a mod.
+		void RenderInstalledPresets()
+		{
+			Im::Spacing();
+			Im::PushStyleColor(kColText, kBlue);
+			Im::SeparatorText("INSTALLED PRESETS");
+			Im::PopStyleColor();
+
+			const auto& installed = Camera::InstalledPresets();
+			if (installed.empty()) {
+				Note("None installed. Preset files go in SKSE/Plugins/SceneDirector/Presets/, "
+					 "or come with a preset mod.");
+				return;
+			}
+
+			for (std::size_t i = 0; i < installed.size(); ++i) {
+				const auto& preset = installed[i];
+				const bool  current = presetState.activeInstalled == static_cast<int>(i);
+
+				Im::PushID(2000 + static_cast<int>(i));
+
+				Icon(current ? kIconCheck : kIconPresets, current ? kGreen : kMuted);
+
+				Im::BeginDisabled(!preset.usable);
+				Im::PushStyleColor(kColText, current ? kGreen : 0xFFCCCCCCu);
+				Im::PushStyleColor(kColCheck, kGreen);
+				bool       ticked = current;
+				const bool clicked = Im::Checkbox(preset.name.c_str(), &ticked);
+				Im::PopStyleColor(2);
+				Im::EndDisabled();
+
+				std::string about = preset.author.empty() ? std::string{} : "by " + preset.author;
+				if (!preset.description.empty()) {
+					about += about.empty() ? preset.description : " - " + preset.description;
+				}
+				if (about.empty()) {
+					about = preset.file;
+				}
+				Im::PushStyleColor(kColText, kMuted);
+				Im::TextWrapped("      %s", about.c_str());
+				Im::PopStyleColor();
+
+				// A broken file can't be ticked; a file with typos still can, minus the
+				// parts that were skipped.
+				if (!preset.problem.empty()) {
+					std::string problem = preset.usable ? preset.file + ", skipped: " + preset.problem :
+					                                      preset.file + ": " + preset.problem;
+					if (preset.skipped > 1) {
+						problem += " (" + std::to_string(preset.skipped - 1) + " more in the log)";
+					}
+					Im::PushStyleColor(kColText, kAmber);
+					Im::TextWrapped("      %s", problem.c_str());
+					Im::PopStyleColor();
+				}
+
+				Im::PopID();
+
+				// The refresh can re-read the folder, which replaces the list being walked.
+				if (clicked) {
+					if (ticked) {
+						Camera::ApplyInstalledPreset(preset);
+					}
+					RefreshPresetState(true);
+					break;
+				}
+			}
+		}
+
+		void RenderExport()
+		{
+			static std::array<char, 64>  name{};
+			static std::array<char, 64>  author{};
+			static std::array<char, 200> description{};
+			static Camera::ExportResult  result{};
+
+			Im::Spacing();
+			Im::PushStyleColor(kColText, kBlue);
+			Im::SeparatorText("EXPORT");
+			Im::PopStyleColor();
+
+			Note("Saves the current settings as a preset file, to share or to package as a mod.");
+
+			Im::PushID("export");
+
+			Icon(kIconRename, kMuted);
+			Im::SetNextItemWidth(220.0f);
+			Im::InputTextWithHint("Name", "e.g. Tavern Talk", name.data(), name.size());
+
+			Icon(kIconRename, kMuted);
+			Im::SetNextItemWidth(220.0f);
+			Im::InputTextWithHint("Author", "optional", author.data(), author.size());
+
+			Icon(kIconRename, kMuted);
+			Im::SetNextItemWidth(320.0f);
+			Im::InputTextWithHint("Description", "optional, one line", description.data(), description.size());
+
+			const bool named = name[0] != '\0';
+
+			// Exporting under a name that's already installed replaces that file.
+			const bool replaces = named && Camera::ExportReplaces(name.data());
+
+			Im::BeginDisabled(!named);
+			Icon(kIconSave, named ? kBlue : kMuted);
+			if (Im::Button(replaces ? "Replace Installed File" : "Export Current Settings")) {
+				result = Camera::ExportPreset(name.data(), author.data(), description.data());
+				RefreshPresetState(true);
+			}
+			Im::EndDisabled();
+
+			if (!result.message.empty()) {
+				if (result.ok) {
+					Icon(kIconCheck, kGreen);
+					Im::PushStyleColor(kColText, kGreen);
+					Im::TextWrapped("%s", result.message.c_str());
+					Im::PopStyleColor();
+					Note("With Mod Organizer it's in Overwrite. Move it into a mod to keep it, "
+						 "or zip that mod to share it.");
+				} else {
+					Warning(result.message.c_str());
+				}
+			}
+
+			Im::PopID();
+		}
+
 		void __stdcall RenderPresets()
 		{
 			const Compact compact;
@@ -1833,22 +1758,16 @@ namespace SD::Menu
 
 			PageHeader(kIconPresets, "PRESETS");
 
-			// The ONE line of prose left on this page, and it earns its place: it
-			// is the only warning that ticking a box here overwrites forty settings
-			// on another one.
+			// The one note on this page: applying a look overwrites the Shots page.
 			Note("Ticking one rewrites the Shots page. Nothing is locked afterwards.");
 			Im::Spacing();
 
 			const auto presets = Camera::AllPresets();
 
-			// ONE CHECKBOX PER LOOK, and ticking it is what applies it.
-			//
-			// RADIO BEHAVIOUR, WITHOUT A RADIO. Nothing stores which preset is on;
-			// it is worked out by comparing live settings, so applying one makes
-			// every other one's comparison fail and they untick themselves. That is
-			// also what keeps these honest against MY PRESETS below — a saved slot
-			// in use nulls the active preset, so the two lists can never both claim
-			// to be what is running.
+			// One checkbox per look; ticking it applies it. Nothing stores which preset is
+			// on: it's worked out by comparing settings, so applying one makes the others
+			// untick themselves. A saved slot in use also clears the active preset, so the
+			// two lists never both claim to be running.
 			for (std::size_t i = 0; i < presetState.count && i < presets.size(); ++i) {
 				const auto& preset = presets[i];
 				const bool  current = presetState.active == &preset;
@@ -1866,10 +1785,8 @@ namespace SD::Menu
 						Camera::ApplyPreset(preset);
 					}
 
-					// Unticking is not an action, because a preset is applied and
-					// then stops existing — there is nothing to go back to. The
-					// refresh below puts the tick straight back, since the settings
-					// still match the look that wrote them.
+					// Unticking isn't an action; the refresh puts the tick back because the
+					// settings still match.
 					RefreshPresetState(true);
 				}
 
@@ -1882,14 +1799,17 @@ namespace SD::Menu
 				Im::PopID();
 			}
 
+			RenderInstalledPresets();
 			RenderCustomSlots();
+			RenderExport();
 
 			Im::Spacing();
 			Im::Separator();
-			Note("No menu? SD.ini, [Presets] sApply=close - applies once, then clears.");
+			Note("No menu? SD.ini, [Presets] sApply=close (or an installed preset's name) - "
+				 "applies once, then clears.");
 		}
 
-		// ---- About -----------------------------------------------------------
+		// ---- About -------------------------------------------------------------
 
 		void __stdcall RenderAbout()
 		{
@@ -1923,11 +1843,9 @@ namespace SD::Menu
 				"than merely watched.");
 			Im::Spacing();
 
-			// The camera-write harness (Diagnostics/iPoseMode), the face probe
-			// (Diagnostics/bLogFaceAnim) and the whole of [Lighting] are
-			// deliberately not surfaced here. All of them read a default when the
-			// key is missing, so the code behind them stays in the tree and stays
-			// inert until somebody sets a key by hand.
+			// Diagnostics (iPoseMode, bLogFaceAnim) and [Lighting] aren't shown here on
+			// purpose. They default when the key is missing and stay inert unless set by
+			// hand.
 
 			Im::Separator();
 
@@ -1948,13 +1866,8 @@ namespace SD::Menu
 
 			Icon(kIconReset, kBlue);
 			if (Im::Button("Restore Defaults")) {
-				// EVERY KEY THE CAMERA AND SCREEN PAGES CAN WRITE, PUT BACK TO WHAT
-				// THE MOD SHIPS.
-				//
-				// Taken from a default-constructed Tunables rather than written out
-				// as literals, so this cannot drift from the shipped values the way
-				// a hand-maintained list would. Tunables' own initialisers are the
-				// Close preset's numbers; see the note on the struct.
+				// Reset every key the Camera and Screen pages can write. Values come from a
+				// default-constructed Tunables, so they can't drift from the shipped defaults.
 				const Camera::Tunables defaults{};
 				Camera::Director::ApplyTunables(defaults);
 
@@ -1979,6 +1892,9 @@ namespace SD::Menu
 				Config::SetBool("Direction", "bFirstPersonFallback", defaults.firstPersonFallback);
 				Config::SetBool("Direction", "bHoldPlacement", defaults.holdPlacement);
 				Config::SetBool("Direction", "bTrue180", defaults.true180);
+				Config::SetBool("Direction", "bFollowFace", defaults.followFace);
+				Config::SetBool("Performance", "bPlayerGestureCue", defaults.playerGestureCue);
+				Config::SetBool("Performance", "bStopWorkToTalk", defaults.stopWorkToTalk);
 				Config::SetBool("Direction", "bEnforceLine", defaults.enforceLine);
 				Config::SetBool("Direction", "bLetterbox", defaults.letterbox);
 				Config::SetInt("Direction", "iLetterboxHeight", defaults.letterboxHeight);
@@ -1987,6 +1903,11 @@ namespace SD::Menu
 				Config::SetBool("Direction", "bFadeAfterPlayerLine", defaults.fadeAfterPlayerLine);
 				Config::SetInt("Direction", "iChoiceFadeDelay", defaults.choiceFadeDelay);
 				Config::SetInt("Direction", "iChoiceFadeTime", defaults.choiceFadeTime);
+				Config::SetBool("Direction", "bPersuasionBeat", defaults.persuasionBeat);
+				Config::SetBool("Direction", "bSubtitlesInBar", defaults.subtitlesInBar);
+				Config::SetBool("Direction", "bFilmScenesAuto", defaults.sceneAuto);
+				Config::SetInt("Direction", "iSceneRange", defaults.sceneRange);
+				Config::SetInt("Direction", "iSceneWait", defaults.sceneWait);
 
 				Log::Info(Log::Category::kCore, "Direction dials reset to defaults from the menu."sv);
 			}
@@ -2004,23 +1925,16 @@ namespace SD::Menu
 
 		MF::SetSection("Cinematic Conversation Camera");
 
-		// Kept alive for the process. The wrapper unregisters in its destructor,
-		// so a temporary here would register and immediately unregister — the key
-		// capture would then silently only work through the game's own sink, which
-		// is the route least likely to fire while this menu is open.
+		// Kept alive for the process; the wrapper unregisters in its destructor.
 		static auto* menuInput = MF::AddInputEvent(OnMenuInput);
 		static_cast<void>(menuInput);
 
-		// Ordered as a new player meets them: pick a look, tune the camera, pick
-		// your angles, tidy the screen, then the pages most people never open.
+		// In the order a new player would use them: pick a look, tune the camera, pick
+		// angles, tidy the screen, then the rest.
 		//
-		// LIGHT IS NOT REGISTERED FOR 1.4. The lamps still exist — see
-		// Scene::LightRig and [Lighting] in SD.ini — and they are still off by
-		// default, but the page asked the player which of several lighting rigs
-		// they would like, and the honest answer to that is "I do not know, I
-		// wanted the faces to look better". It is dormant rather than deleted:
-		// setting [Lighting] bLights=1 by hand still works, and per-angle lighting
-		// still appears in the shot editor when [Lighting] bPerShot=1.
+		// The Light page isn't registered. The lamps still exist (Scene::LightRig,
+		// [Lighting] in SD.ini) and work when [Lighting] bLights=1 is set by hand;
+		// per-angle lighting shows in the shot editor with [Lighting] bPerShot=1.
 		MF::AddSectionItem("Presets", RenderPresets);
 		MF::AddSectionItem("Camera", RenderCamera);
 		MF::AddSectionItem("Shots", RenderShots);

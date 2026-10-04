@@ -2,6 +2,7 @@
 
 #include "SD/Camera/Director.h"
 #include "SD/Core/Logging.h"
+#include "SD/Dialogue/SceneWatch.h"
 
 #include <chrono>
 
@@ -13,24 +14,17 @@ namespace SD::Dialogue
 
 		std::atomic_bool installed{ false };
 
-		// The line currently being tracked, identified by response pointer.
-		//
-		// It is not yet known whether the engine calls UpdateInDialogue once when a
-		// line begins or on every frame for its duration. Both are handled: a new
-		// pointer opens a line, a repeat increments a counter, and the log reports
-		// the count so the next run settles the question rather than assuming it.
+		// The line being tracked, identified by response pointer. The hook may be
+		// called once per line or every frame; a new pointer opens a line and a repeat
+		// increments a counter, which is logged.
 		const RE::DialogueResponse*           activeResponse{ nullptr };
 		std::chrono::steady_clock::time_point activeSince{};
 		std::uint32_t                         activeCalls{ 0 };
 		std::uint32_t                         lineOrdinal{ 0 };
 
-		// Who owns the line currently being timed.
-		//
-		// The engine calls UpdateInDialogue(null) on actors that are not speaking —
-		// the listener among them — roughly a tenth of a second after a line opens.
-		// The first build closed the line on any null and reported 0.08s and 0.11s
-		// durations for lines that actually run about 2.7s. A null only ends a line
-		// if it comes from the actor that started it.
+		// Who owns the line being tracked. The engine calls UpdateInDialogue(null) on
+		// actors that aren't speaking (including the listener) shortly after a line
+		// starts, so a null only ends the line when it comes from the speaker.
 		RE::FormID activeSpeakerID{ 0 };
 
 		std::string_view EmotionName(Emotion a_type) noexcept
@@ -78,15 +72,10 @@ namespace SD::Dialogue
 				return;
 			}
 
-			// No duration is reported here, deliberately.
-			//
-			// Measured: the engine calls UpdateInDialogue(response) and then
-			// UpdateInDialogue(null) on the *same* actor about a tenth of a second
-			// later, while the line still has seconds to run. It is a notification,
-			// not a span — so this hook owns line *starts*, which it reports better
-			// than anything else available, and Session owns duration by watching
-			// MenuTopicManager::currentTopicInfo. Reporting 0.1s here was measuring
-			// the gap between two notifications and calling it a line.
+			// No duration is reported here: the engine calls UpdateInDialogue(null) on the
+			// same actor about a tenth of a second after the line starts, while it still
+			// has seconds to run. This hook reports line starts; Session tracks duration
+			// through MenuTopicManager::currentTopicInfo.
 			activeResponse = nullptr;
 			activeSpeakerID = 0;
 			activeCalls = 0;
@@ -100,9 +89,7 @@ namespace SD::Dialogue
 				if (activeResponse && speakerID == activeSpeakerID) {
 					CloseActiveLine();
 				} else if (activeResponse) {
-					// Recorded rather than silently dropped: how often a non-speaker
-					// nulls mid-line, and who, is what decides whether this rule is
-					// sufficient or whether an end signal has to come from elsewhere.
+					// Logged, to see how often a non-speaker sends null mid-line.
 					Log::Info(Log::Category::kDialogue,
 						"Ignored null from {} [{:08X}] while line {} is held by [{:08X}]."sv,
 						NameOf(a_speaker), speakerID, lineOrdinal, activeSpeakerID);
@@ -142,14 +129,19 @@ namespace SD::Dialogue
 				(voice && *voice) ? voice : "<none>",
 				Condense(a_response->text.c_str(), 90));
 
-			// The cue is what tells the director a reply has started, and carries
-			// the intensity that decides whether this line has earned a close-up.
+			// Every NPC line is kept for a while, so two NPCs talking can be filmed. See
+			// SceneWatch.
+			if (!byPlayer) {
+				SceneWatch::OnLine(a_speaker, a_response);
+			}
+
+			// The cue tells the Director a reply has started and carries the intensity
+			// that decides whether it earns a close-up.
 			Camera::Director::OnCue(a_speaker, a_response);
 		}
 
-		// Distinct instantiations so Character and PlayerCharacter each keep their
-		// own trampoline. Sharing one static would call whichever original happened
-		// to be written last.
+		// Separate instantiations so Character and PlayerCharacter keep their own
+		// original; a shared static would call whichever was written last.
 		template <std::size_t Slot>
 		struct UpdateInDialogueHook
 		{

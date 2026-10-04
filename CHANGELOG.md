@@ -1,5 +1,92 @@
 # Changelog
 
+## 1.5.0 — 2026-10-03
+
+New:
+
+- **Film other people's conversations.** Two NPCs talking to each other are
+  filmed like a conversation of your own, with the second NPC in your place in
+  every shot. Use the Film Their Conversation key (Keys page,
+  `iKeyFilmScene`), which works outside conversations and also films one NPC
+  talking to you, or turn on **Film When You Stand Still** (Camera > Other
+  People's Conversations, `bFilmScenesAuto`, default off; `iSceneRange`,
+  `iSceneWait`) to start filming when you stand still near a conversation in
+  front of you.
+  - A scene the game is playing is filmed as a whole: anyone in it can speak,
+    and the camera pairs the speaker with whoever they're talking to.
+    Filming follows the sequence into its next scene and continues if
+    someone in it dies.
+  - Automatic mode only starts on a real conversation: two NPCs in the same
+    scene, or a quick back-and-forth between them. A line said to you outside
+    a scene (a greeting in passing, a follower's aside, a merchant) never
+    starts it; a scene that addresses you with several voices does.
+  - When a scene hands you your turn ("Up through the tower, let's go!"
+    followed by the same lines on repeat), the camera lets go a second after
+    the last real line. This is read from the scene's own data (lines the
+    game repeats while it waits), not from the words.
+  - A one- or two-word shout from outside the frame ("Halt!") doesn't cause a
+    cut. Shots from behind someone's head are avoided.
+  - Moving, combat, a menu, your own conversation or the scene going quiet
+    hands the camera back.
+- **Subtitles In The Black Bar** (Screen > Black Bars, `bSubtitlesInBar`,
+  default off). The spoken line sits centred in the bottom bar and follows it
+  as it eases in and out. With no bar, or a bar too thin for the text, it goes
+  back over the picture. Works for your conversations and for filmed ones.
+  Edge UI's Exit prompt, which sits in the bottom bar, is faded while this is
+  on; it still works.
+- **Hold On Their Answer** (Camera > Persuasion, `bPersuasionBeat`, default
+  on). When you persuade, intimidate or bribe, their answer cuts to a
+  close-up of them, held for the whole reply with a slow push in. Speech
+  checks are recognised from the reply's conditions, so modded checks that
+  use the standard conditions work too.
+- **Close-Ups Follow The Face** (Camera > Framing, `bFollowFace`, default
+  on). Close-ups frame where the face actually is, so someone leaning over a
+  workbench is framed on their face rather than on where their head was.
+  Humanoids only. In filmed scenes the face is found at each cut and then
+  held, since people in scenes walk and kneel.
+- **They Stop Working To Talk** (Faces > Body, `bStopWorkToTalk`, default
+  on). Someone at a workbench, forge, smelter, tanning rack or similar steps
+  away from it 3 to 5 seconds after they start talking. Seats, beds and quest
+  scenes are left alone.
+- **Your Gestures Start With Your Line** (Faces > Body, `bPlayerGestureCue`,
+  default on). When your voiced line starts, the mod sends DBVO's
+  PlayDBVOTopic event, so DBVO player-gesture add-ons gesture while you speak
+  under ReVoiced and DBVO 2. Not sent under DBVO 1, which sends its own.
+- **Preset files.** Presets can be exported and installed as JSON files, so
+  they can be shared as their own mods. Every file in
+  `SKSE/Plugins/SceneDirector/Presets/` is listed on the Presets page under
+  Installed Presets, as many as you install, and one file can hold several
+  presets. The Export section saves your current settings there with a name,
+  author and description. Mistakes in a hand-edited file are shown under the
+  preset instead of failing silently. The format is in USAGE.md, and
+  `[Presets] sApply` can name an installed preset.
+
+Changed and fixed:
+
+- The extreme close-ups are now actually extreme: they frame forehead to just
+  under the chin. They were sized like a close-up.
+- NPCs no longer snap into place when the camera cuts to them. The game only
+  fully animates actors that were on screen last frame; the people the camera
+  may cut to are now kept fully animated while it's directing.
+- **Stay On You After You Speak** only covers the silence before their reply;
+  the camera goes to them as soon as they start talking.
+- **Fade After PC Line**: the topic list you picked from is gone by the time
+  your voiced line ends, instead of fading during their reply.
+- The topic list fade no longer flashes rows while the menu rebuilds them,
+  never brightens what the menu itself hid, and leaves the list alone when
+  the menu's state can't be read.
+- The camera now takes conversations it used to miss: a distant hostile
+  keeping your combat flag up no longer releases it while the dialogue menu
+  is open, and re-entering a conversation while the NPC finishes a line is
+  staged right away.
+- Under the PureDark upscaler, the bars are drawn correctly beneath the
+  interface (the UI and the swap chain are different sizes there).
+- Quieter log: lines that used to repeat on every check are written when they
+  change, and the frame heartbeat is once a minute.
+
+The Release build and all 24 tests pass. New options that change behaviour
+on their own (filming by standing still, subtitles in the bar) ship off.
+
 ## 1.4.8 — 2026-09-23
 
 - Add **True 180 Rule** (Camera > Framing, `[Direction] bTrue180`, default off).
@@ -42,7 +129,7 @@ The Release build and 16 tests pass. In-game performance testing is still needed
 The reported dialogue exit/re-entry control lock remains unresolved.
 ## 1.4.5 — 2026-09-11
 
-Packages the current playtested development tree as requested. No additional
+Packages the current playtested development tree. No additional
 camera or expression behavior changes were made for this version bump.
 
 - Clause-based player facial acting separates conversational action from tone:
@@ -84,7 +171,7 @@ active player controller no longer uses the previous DialogueAffect rule set.
 
 ### Speaking upper-face phrase test
 
-User clarified that the missing movement was on the player while speaking, not
+The missing movement was on the player while speaking, not while
 listening. Strengthen neutral spoken delivery and give it opening/phrase accents;
 increase the mouth-excluded regional eye/cheek contribution, including ordinary
 questions and statements. Keep routine questions emotionally neutral and preserve
@@ -94,7 +181,7 @@ ownership. No changes to lipsync, NPC acting, listener-v2 tuning or camera logic
 ### Stronger cinematic listening test (v2)
 
 The first full-face test was still too subtle in the HPH female playtest, including
-at the user's maximum 2.0 expression strength. Raise the listener coefficient from
+at the maximum 2.0 expression strength. Raise the listener coefficient from
 0.38 to 0.72 and the shared native-pose ceiling from 0.55 to 0.85. Broaden emotional
 accents and retain more smile/concern after the peak; surprise still subsides.
 Speech gates, ownership cleanup, overlapping-layer attenuation and camera logic

@@ -44,7 +44,7 @@ namespace SD::Dialogue
 				return "<no text>"s;
 			}
 			std::string text{ a_raw };
-			// Response text carries newlines; a log line should stay one line.
+			// Response text can contain newlines; keep the log line on one line.
 			std::replace(text.begin(), text.end(), '\n', ' ');
 			std::replace(text.begin(), text.end(), '\r', ' ');
 			if (text.size() > a_max) {
@@ -54,11 +54,8 @@ namespace SD::Dialogue
 			return text;
 		}
 
-		// The head position the staging solver will frame against.
-		//
-		// Falls back to the root when the head node is missing rather than failing:
-		// a creature or a headless custom race still has to be framed somehow, and
-		// the caller cannot tell the difference from a null.
+		// The head position to frame against. Falls back to the root when there's no
+		// head node, so creatures and unusual races still get framed.
 		std::optional<RE::NiPoint3> HeadOf(RE::Actor* a_actor)
 		{
 			auto* root = a_actor ? a_actor->Get3D(false) : nullptr;
@@ -72,13 +69,9 @@ namespace SD::Dialogue
 		}
 
 		// Read the response list the manager already built for this topic info.
-		//
-		// Deliberately does not construct a DialogueItem to fill the gaps. That ctor
-		// is a relocated engine call that allocates from the game heap, and guessing
-		// at its lifetime during live dialogue is a poor trade for a field the
-		// director can survive without. When the match fails the line is reported
-		// unresolved and the log says so — which is exactly the evidence needed to
-		// decide later whether the fallback is worth the risk.
+		// Doesn't construct a DialogueItem to fill gaps: that's an engine call that
+		// allocates from the game heap, and the line can do without it. Unmatched
+		// lines are logged as unresolved.
 		void ReadResponses(RE::MenuTopicManager* a_manager, RE::TESTopicInfo* a_info, Line& a_line)
 		{
 			auto* dialogue = a_manager->lastSelectedDialogue;
@@ -125,20 +118,17 @@ namespace SD::Dialogue
 			return;
 		}
 
-		// THE TWO HANDLES, READ SEPARATELY. See Session.h for what each one means.
-		//
-		// speaker goes null the moment the menu closes, but the NPC keeps talking
-		// through the farewell line. lastSpeaker is what carries the conversation
-		// through that tail, and cutting away on the goodbye would be the most
-		// visible possible failure — so the tail still keeps the session alive.
-		// What it no longer does is look like live participation.
+		// The two speaker handles, read separately (see Session.h). speaker goes null
+		// when the menu closes, but the NPC keeps talking through the farewell;
+		// lastSpeaker keeps the session alive through that tail, without counting as
+		// the player still being in the conversation.
 		auto*      live = AsActor(manager->speaker);
 		auto*      tail = AsActor(manager->lastSpeaker);
 		auto*      speaker = live ? live : tail;
 		const bool inConversation = speaker != nullptr;
 
-		// Published every frame, before any of the transitions below can end the
-		// session — see PlayerEngaged.
+		// Published every frame, before any transition below can end the session. See
+		// PlayerEngaged.
 		engaged = live != nullptr;
 
 		if (inConversation && !active) {
@@ -149,12 +139,9 @@ namespace SD::Dialogue
 			Exit();
 			return;
 		} else if (inConversation && active && speaker->GetFormID() != partnerID) {
-			// The player walked from one conversation straight into another.
-			//
-			// The speaker handle never goes null in between, so watching only for
-			// "in a conversation or not" left the session running with the previous
-			// partner's handle — and anything keyed to the session opening never
-			// fired for the new one.
+			// The player went straight from one conversation into another. The speaker
+			// handle never goes null in between, so the partner change has to be detected
+			// explicitly.
 			Log::Info(Log::Category::kDialogue,
 				"Partner changed mid-session: [{:08X}] -> {} [{:08X}]; restarting."sv,
 				partnerID, NameOf(speaker), speaker->GetFormID());
@@ -163,22 +150,10 @@ namespace SD::Dialogue
 			hadLive = live != nullptr;
 			lostLive = false;
 		} else if (active && live && lostLive) {
-			// INTERRUPTING SOMEBODY WHO NEVER STOPPED TALKING.
-			//
-			// The reported case: an NPC is part way through a line — a farewell the
-			// player walked out on, or world chatter that left lastSpeaker set —
-			// and the player activates them. The engine starts a genuinely new
-			// conversation. Nothing in the old reading of this changed: same
-			// actor, same form id, session already active, so no Enter fired, the
-			// serial never moved, and Runtime's "one open per partner" rule
-			// concluded it had already staged this one. The result was a second
-			// conversation with no camera, no bars, and a topic list nothing was
-			// driving — which is what "does not initialize correctly" looked like
-			// from the outside.
-			//
-			// Ended and restarted exactly once, on the frame the live speaker comes
-			// back, and never per frame: lostLive is cleared by the restart and can
-			// only be set again by the speaker handle going null once more.
+			// A new conversation with someone who never stopped talking: the player left
+			// mid-line (the session stayed alive on lastSpeaker) and activated them again.
+			// Same actor, same form ID, so restart the session once, on the frame the live
+			// speaker comes back. lostLive is cleared by the restart.
 			Log::Info(Log::Category::kDialogue,
 				"Re-entered dialogue with {} [{:08X}] while their previous line was "
 				"still running; ending the old session and starting a new one."sv,
@@ -188,13 +163,9 @@ namespace SD::Dialogue
 			hadLive = true;
 			lostLive = false;
 		} else if (active) {
-			// The bookkeeping for the branch above, and the only place it is set.
-			//
-			// A session entered from the tail alone — a forcegreet, an NPC talking
-			// at the player with no menu — has never had a live speaker, so it can
-			// never arm this. That is deliberate: the menu appearing partway
-			// through a forcegreet is the same conversation continuing, not a new
-			// one, and restarting it there would cost a cut for nothing.
+			// The only place lostLive is armed. A session entered from the tail alone (a
+			// forcegreet with no menu) never had a live speaker, so the menu appearing
+			// partway through it continues the same conversation.
 			if (live) {
 				hadLive = true;
 				lostLive = false;
@@ -237,9 +208,8 @@ namespace SD::Dialogue
 		partnerID = a_speaker ? a_speaker->GetFormID() : 0;
 		partner = a_speaker ? a_speaker->GetHandle() : RE::ActorHandle{};
 
-		// The identity everything downstream keys on. Bumped here and nowhere else,
-		// so one Enter is one conversation however many times the same person is
-		// spoken to. See ConversationSerial.
+		// The conversation identity everything downstream keys on. Bumped here only.
+		// See ConversationSerial.
 		++serial;
 
 		auto*      player = RE::PlayerCharacter::GetSingleton();
@@ -276,9 +246,8 @@ namespace SD::Dialogue
 		lineElapsed = 0.0f;
 		sessionElapsed = 0.0f;
 
-		// Cleared with everything else. Left set, the first frame of the NEXT
-		// session would see a live speaker with lostLive still armed and restart a
-		// conversation that had only just begun.
+		// Cleared with everything else, or the next session's first frame would
+		// restart a conversation that just began.
 		hadLive = false;
 		lostLive = false;
 		engaged = false;
@@ -293,8 +262,7 @@ namespace SD::Dialogue
 		current.speakerID = a_speaker ? a_speaker->GetFormID() : 0;
 		current.speakerName = NameOf(a_speaker);
 		current.greeting = manager && manager->isGreetingPlayer;
-		// forceGoodbye is the same B2 flag CommonLibSSE used to call isSayingGoodbye;
-		// it was renamed upstream, not replaced.
+		// forceGoodbye is the same flag CommonLibSSE used to call isSayingGoodbye.
 		current.farewell = manager && manager->forceGoodbye;
 
 		if (manager) {
@@ -317,9 +285,8 @@ namespace SD::Dialogue
 				current.farewell ? " | FAREWELL"sv : ""sv,
 				current.text);
 		} else {
-			// Expected whenever the NPC speaks something the player did not pick
-			// from the menu — forcegreets, scene lines, idle chatter. How often this
-			// fires decides whether the director needs a second source of truth.
+			// Expected whenever the NPC says something the player didn't pick
+			// (forcegreets, scene lines, idle chatter).
 			Log::Info(Log::Category::kDialogue,
 				"Line {} start | {} [{:08X}] | UNRESOLVED (no matching response list){}{}"sv,
 				lineCount, current.speakerName, current.topicInfoID,
@@ -330,10 +297,7 @@ namespace SD::Dialogue
 
 	void Session::EndLine()
 	{
-		// The single most important number in this build. The cut policy needs to
-		// know a line's length to decide whether it can be cut on at all, and
-		// whether that length is knowable *before* the line plays or only after it
-		// ends decides whether the director can plan a shot or must react to one.
+		// Whether a line's length is known before it plays or only after it ends.
 		Log::Info(Log::Category::kDialogue,
 			"Line {} end   | {:.2f}s | {} response(s){}"sv,
 			lineCount, lineElapsed, current.responseCount,
@@ -358,8 +322,7 @@ namespace SD::Dialogue
 		lostLive = false;
 		engaged = false;
 
-		// The serial is NOT reset. It is an identity, not a count, and Runtime
-		// compares it against one it recorded before the load — so restarting it at
-		// zero could hand the new world a serial the old one had already staged.
+		// The serial isn't reset: it's an identity, and Runtime compares it with one
+		// recorded before the load.
 	}
 }

@@ -6,20 +6,12 @@ namespace SD::Scene
 {
 	namespace
 	{
-		// THE FOUR LOOKS, PLUS OFF.
+		// The four looks, plus Off. They differ only in shape; color is a separate
+		// setting. A look is defined as much by the lamp it leaves out as by the ones
+		// it uses (Hard has no fill, Edge has no key).
 		//
-		// They differ by SHAPE and by nothing else. There is no warm look and no
-		// cold one, because colour is a dial the player already has, and a list
-		// that mixes "how hard is the light" with "what colour is it" is a list
-		// where half the entries are the same entry twice.
-		//
-		// A look is defined as much by the lamp it OMITS as by the ones it runs.
-		// Hard has no fill and Edge has no key, and softening either would produce
-		// something that merely resembles it — which is how a short list stops
-		// being worth choosing from.
-		//
-		// ORDER IS NOT STORAGE. A shot stores the `key` string, so this table can
-		// be reordered or extended freely; only a rename breaks an existing config.
+		// Order isn't storage: shots store the `key` string, so the table can be
+		// reordered or extended; only a rename breaks a config.
 		constexpr LookSpec kLooks[] = {
 			//                    intensity, radius, azimuth, elevation, distance
 			{ "off", "Off", "No added light. The room lights the scene, as the game always did.",
@@ -68,9 +60,8 @@ namespace SD::Scene
 				continue;
 			}
 
-			// ASCII-only on purpose. Look keys are ASCII by construction, and
-			// std::tolower on a signed char above 0x7F is undefined — a
-			// hand-edited file is exactly where such a byte turns up.
+			// ASCII-only on purpose: look keys are ASCII, and std::tolower on a signed
+			// char above 0x7F is undefined.
 			bool match = true;
 			for (std::size_t c = 0; c < candidate.size(); ++c) {
 				const auto lhs = static_cast<unsigned char>(candidate[c]);
@@ -89,21 +80,15 @@ namespace SD::Scene
 
 	int DefaultLook()
 	{
-		// Natural rather than Off, and that is a decision rather than a fallback.
-		// An angle whose key is missing has never been touched, and the honest
-		// answer to "what should an untouched angle look like" is the look that
-		// was authored to be safe everywhere — not one that quietly switches the
-		// feature off for anybody who has not been through the list.
+		// Natural rather than Off for an untouched angle: it's the look that's safe
+		// everywhere.
 		const int natural = FindLook("natural");
 		return natural >= 0 ? natural : 0;
 	}
 
 	RE::NiColor ColourFrom(int a_red, int a_green, int a_blue)
 	{
-		// Stored 0-255 and used 0-1, because 0-255 is what a colour picker hands
-		// back and what anybody reading the ini expects to see. There is no curve
-		// here and there should not be one: whatever the picker showed is what the
-		// lamp gets.
+		// Stored 0-255 (what a color picker returns and what the ini shows), used 0-1.
 		return RE::NiColor{
 			std::clamp(a_red, 0, 255) / 255.0f,
 			std::clamp(a_green, 0, 255) / 255.0f,

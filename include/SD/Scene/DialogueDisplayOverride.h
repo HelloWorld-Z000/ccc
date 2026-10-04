@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <utility>
@@ -32,6 +33,18 @@ namespace SD::Scene
 			if (!node.ReadAlpha(actual)) {
 				return false;
 			}
+			// The movie can rebuild or animate this same holder during our fade.
+			// Once it writes a new alpha, the old restore value is no longer ours
+			// to put back. Check before the no-write return as well.
+			if (originalAlpha && actual != writtenAlpha) {
+				originalAlpha.reset();
+			}
+			// Our fade may dim the movie, but must never brighten its own hide
+			// or transition. Reapplying an absolute fade alpha over a movie-written
+			// zero briefly revealed rows each time selection rebuilt the list.
+			// Use the saved movie alpha while we still own the current write, so
+			// fading back in is not capped by our own previous, darker frame.
+			a_alpha = std::min(a_alpha, originalAlpha.value_or(actual));
 			if (std::abs(actual - a_alpha) < 0.5) {
 				return true;
 			}
@@ -42,6 +55,12 @@ namespace SD::Scene
 				originalAlpha = actual;
 			}
 			writtenAlpha = a_alpha;
+			// Remember the stored value if the display API rounds our number.
+			// Otherwise the next frame could mistake our own write for the movie's.
+			double applied{};
+			if (node.ReadAlpha(applied)) {
+				writtenAlpha = applied;
+			}
 			return true;
 		}
 

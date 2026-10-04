@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 namespace SD::Camera
@@ -16,8 +17,9 @@ namespace SD::Camera
 			sinceEnd = 0.0f;
 		}
 
-		// Seconds to keep the camera on the player after their voiced line ends.
-		// Timed from the end of the line, so it can run into the NPC's reply.
+		// Seconds to keep the camera on the player after their voiced line ends. Only
+		// covers the silence before the reply: the reply starting ends the hold early.
+		// Any pause after the line comes from the voice mod's own post-line delay.
 		void SetDelay(float a_seconds) noexcept
 		{
 			delay = a_seconds > 0.0f ? a_seconds : 0.0f;
@@ -40,6 +42,8 @@ namespace SD::Camera
 
 			if (phase == Phase::kAwaitingReply && a_npcSpeaking) {
 				phase = Phase::kReply;
+				// Whoever is talking gets the camera. See SetDelay.
+				sinceEnd = std::max(sinceEnd, delay);
 			} else if (phase == Phase::kReply && !a_npcSpeaking) {
 				phase = Phase::kIdle;
 			}

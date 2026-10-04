@@ -13,14 +13,8 @@ namespace SD::Render
 		// IUnknown 0-2, IDXGIObject 3-6, IDXGIDeviceSubObject 7, Present 8.
 		constexpr std::size_t kPresentIndex = 8;
 
-		// Fraction of screen height each bar occupies at full extension. 2.35:1 on
-		// a 16:9 frame works out near this; it reads as scope without eating the
-		// subtitles.
-		//
-		// Atomic because the present hook reads it on the render thread while the
-		// director writes it from the game thread at the start of a conversation.
-		// A torn float here would be a one-frame wrong bar height, but the fix is
-		// free so there is no reason to accept even that.
+		// Fraction of screen height each bar covers when fully out. Atomic because the
+		// Present hook reads it on the render thread while the game thread writes it.
 		std::atomic<float> barFraction{ 0.115f };
 		constexpr float    kEaseSeconds = 0.32f;
 
@@ -32,8 +26,8 @@ namespace SD::Render
 		// "Off the screen now, not eased off." See Letterbox::Retract.
 		std::atomic_bool       snapClosed{ false };
 
-		// A menu owns the screen, as MenuWatch understands it rather than as the
-		// pause counter does. See Letterbox::SetScreenTaken.
+		// A menu owns the screen, as MenuWatch sees it (not the pause counter). See
+		// Letterbox::SetScreenTaken.
 		std::atomic_bool       screenTaken{ false };
 
 		ComPtr<ID3D11VertexShader> vertexShader;
@@ -46,12 +40,37 @@ namespace SD::Render
 		ComPtr<ID3D11RenderTargetView>  renderTarget;
 		bool                            resourcesReady{ false };
 
+		// The back buffer's size, so a menu drawing into an off-screen texture isn't
+		// given the bars.
+		UINT frameWidth{ 0 };
+		UINT frameHeight{ 0 };
+
 		float                                 extension{ 0.0f };
 		std::chrono::steady_clock::time_point lastDraw{};
 		bool                                  haveLastDraw{ false };
 
+		// The bottom bar as last drawn, as a fraction of the frame.
+		std::atomic<float> drawnFraction{ 0.0f };
+
+		// Under the interface or over it. Present runs after every menu has drawn, so
+		// bars drawn there cover the interface. With subtitles in the bar, the bars
+		// are drawn before the chosen menu's movie instead, so the menus draw on top.
+		// Present still draws them on any frame where that didn't happen.
+		std::atomic<Letterbox::Beneath> beneath{ Letterbox::Beneath::kOff };
+		std::atomic<std::uint64_t>      presentFrame{ 0 };
+		std::atomic<std::uint64_t>      beneathFrame{ ~0ull };
+
+		// The frame each hooked menu last drew on, so the render order can be
+		// reported: a HUD that draws after the dialogue menu draws over bars placed
+		// under the dialogue menu.
+		std::atomic<std::uint64_t> hudDrawnFrame{ ~0ull };
+		Log::OnceFlag              orderReported;
+
 		Log::OnceFlag firstDrawReported;
 		Log::OnceFlag menuRetractReported;
+		Log::OnceFlag beneathReported;
+		Log::OnceFlag beneathUnboundReported;
+		Log::OnceFlag beneathMismatchReported;
 
 		constexpr char kShaderSource[] = R"(
 struct VSIn  { float2 pos : POSITION; };
@@ -143,6 +162,11 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 				return false;
 			}
 
+			D3D11_TEXTURE2D_DESC frameDesc{};
+			backBuffer->GetDesc(&frameDesc);
+			frameWidth = frameDesc.Width;
+			frameHeight = frameDesc.Height;
+
 			resourcesReady = true;
 			Log::Info(Log::Category::kRender, "Letterbox resources created."sv);
 			return true;
@@ -150,7 +174,7 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 
 		void WriteBars(ID3D11DeviceContext* a_context, float a_height)
 		{
-			// Clip space: y = 1 at the top, -1 at the bottom. A bar of a_height in
+			// Clip space: y = 1 at the top, -1 at the bottom, so a bar of a_height in
 			// screen fractions is 2 * a_height tall here.
 			const float h = a_height * 2.0f;
 			const float top = 1.0f;
@@ -173,24 +197,10 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			}
 		}
 
-		void Draw(IDXGISwapChain* a_swapChain)
+		// One frame of the ease, run once per frame by whichever path draws. False
+		// when there's nothing to draw; a_height is the bar to draw.
+		[[nodiscard]] bool Advance(float& a_height)
 		{
-			auto* manager = RE::BSGraphics::Renderer::GetSingleton();
-			if (!manager) {
-				return;
-			}
-			auto& runtime = manager->GetRuntimeData();
-			if (!runtime.forwarder || !runtime.context) {
-				return;
-			}
-
-			auto* device = reinterpret_cast<ID3D11Device*>(runtime.forwarder);
-			auto* context = reinterpret_cast<ID3D11DeviceContext*>(runtime.context);
-
-			if (!resourcesReady && !CreateResources(device, a_swapChain)) {
-				return;
-			}
-
 			// Ease toward the target so the bars slide rather than pop.
 			const auto now = std::chrono::steady_clock::now();
 			float      delta = 1.0f / 60.0f;
@@ -200,38 +210,15 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			lastDraw = now;
 			haveLastDraw = true;
 
-			// Retract instantly, from here, whenever a menu owns the screen.
+			// Retract immediately, from here, whenever a menu owns the screen. The
+			// Director's tick stops while a pausing menu is up but Present doesn't, so
+			// this has to be decided here.
 			//
-			// This has to be decided HERE and not in the director's tick, because
-			// that tick rides PlayerCharacter::Update and stops while a pausing menu
-			// is up. Present does not. So opening barter, an inventory or the map
-			// froze the director mid-conversation with the bars still extended, and
-			// they sat across the merchant's inventory until the menu closed and the
-			// tick resumed.
-			//
-			// WHAT THIS NO LONGER ASKS IS RE::UI::GameIsPaused(), and that read is
-			// the whole of a reported bug.
-			//
-			// numPausesGame is not "a menu owns the screen". It counts the CONSOLE,
-			// which this mod deliberately treats as an overlay over a scene that has
-			// not moved. It counts any overlay a mod puts up that freezes time. And
-			// it counts SKSE Menu Framework's own settings panel, whose
-			// FreezeTimeOnMenu option is shipped as true by more than one mod that
-			// bundles the framework.
-			//
-			// That last one is not theoretical. It meant the bars were forced off
-			// the screen for exactly as long as the panel that configures them was
-			// open: tick Black Bars, drag Bar Height, watch nothing happen, conclude
-			// the switch is broken. Both settings were applying live the whole time
-			// and neither could be seen. Reported as "black bar cannot be brought up
-			// no matter what I set".
-			//
-			// The two flags below are the narrower question, asked of the two places
-			// that actually know the answer. `screenTaken` is MenuWatch's level
-			// answer — it carries the Console exemption and it catches CraftingMenu,
-			// which owns the screen without pausing anything. `snapClosed` is the
-			// director's edge: take the bars off NOW rather than easing them, on the
-			// frame a menu is about to draw over them.
+			// Not RE::UI::GameIsPaused(): that also counts the console, time-freezing
+			// overlays and SKSE Menu Framework's own settings panel (FreezeTimeOnMenu),
+			// which hid the bars while the player was adjusting them. `screenTaken` is
+			// MenuWatch's answer (console excluded, CraftingMenu included); `snapClosed`
+			// is the Director asking for the bars to go now rather than ease out.
 			const bool taken = snapClosed.load(std::memory_order_acquire) ||
 				screenTaken.load(std::memory_order_acquire);
 			if (taken) {
@@ -240,7 +227,8 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 						"Menu took the screen; bars retracted from the present hook."sv);
 				}
 				extension = 0.0f;
-				return;
+				drawnFraction.store(0.0f, std::memory_order_relaxed);
+				return false;
 			}
 
 			const float target = wantVisible.load(std::memory_order_acquire) ? 1.0f : 0.0f;
@@ -248,13 +236,23 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			extension += std::clamp(target - extension, -step, step);
 
 			if (extension <= 0.001f) {
-				return;  // fully retracted; touch nothing
+				drawnFraction.store(0.0f, std::memory_order_relaxed);
+				return false;  // fully retracted; touch nothing
 			}
 
-			// Back up everything about to be overwritten. Drawing inside Present
-			// without restoring corrupts whatever the game renders next frame, and
-			// the symptom is a stretched or missing UI rather than anything that
-			// points here.
+			a_height = barFraction.load(std::memory_order_relaxed) * extension;
+			drawnFraction.store(a_height, std::memory_order_relaxed);
+			return true;
+		}
+
+		// Draws the bars into a_target and restores everything it touched. a_viewport
+		// is set when the caller isn't Present (whose viewport is already the whole
+		// frame).
+		void Render(ID3D11DeviceContext* context, ID3D11RenderTargetView* a_target,
+			const D3D11_VIEWPORT* a_viewport, float a_height)
+		{
+			// Back up everything that's about to be overwritten. Drawing in Present
+			// without restoring corrupts the game's next frame.
 			ComPtr<ID3D11RenderTargetView> savedRTV;
 			ComPtr<ID3D11DepthStencilView> savedDSV;
 			context->OMGetRenderTargets(1, &savedRTV, &savedDSV);
@@ -290,14 +288,17 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			context->VSGetShader(&savedVS, nullptr, nullptr);
 			context->PSGetShader(&savedPS, nullptr, nullptr);
 
-			WriteBars(context, barFraction.load(std::memory_order_relaxed) * extension);
+			WriteBars(context, a_height);
 
 			const UINT stride = sizeof(float) * 2;
 			const UINT offset = 0;
-			ID3D11RenderTargetView* rtv = renderTarget.Get();
+			ID3D11RenderTargetView* rtv = a_target;
 			const float             blendFactor[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
 
 			context->OMSetRenderTargets(1, &rtv, nullptr);
+			if (a_viewport) {
+				context->RSSetViewports(1, a_viewport);
+			}
 			context->OMSetBlendState(blendState.Get(), blendFactor, 0xFFFFFFFF);
 			context->OMSetDepthStencilState(depthState.Get(), 0);
 			context->RSSetState(rasterState.Get());
@@ -321,6 +322,42 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			context->OMSetDepthStencilState(savedDepth.Get(), savedStencilRef);
 			context->OMSetBlendState(savedBlend.Get(), savedBlendFactor, savedSampleMask);
 			context->OMSetRenderTargets(1, savedRTV.GetAddressOf(), savedDSV.Get());
+		}
+
+		[[nodiscard]] ID3D11DeviceContext* Context(ID3D11Device** a_device = nullptr)
+		{
+			auto* manager = RE::BSGraphics::Renderer::GetSingleton();
+			if (!manager) {
+				return nullptr;
+			}
+			auto& runtime = manager->GetRuntimeData();
+			if (!runtime.forwarder || !runtime.context) {
+				return nullptr;
+			}
+			if (a_device) {
+				*a_device = reinterpret_cast<ID3D11Device*>(runtime.forwarder);
+			}
+			return reinterpret_cast<ID3D11DeviceContext*>(runtime.context);
+		}
+
+		void Draw(IDXGISwapChain* a_swapChain)
+		{
+			ID3D11Device* device = nullptr;
+			auto*         context = Context(&device);
+			if (!context) {
+				return;
+			}
+
+			if (!resourcesReady && !CreateResources(device, a_swapChain)) {
+				return;
+			}
+
+			float height = 0.0f;
+			if (!Advance(height)) {
+				return;
+			}
+
+			Render(context, renderTarget.Get(), nullptr, height);
 
 			if (firstDrawReported.Take()) {
 				Log::Info(Log::Category::kRender, "Letterbox drawing; bar height {:.1f}% of frame."sv,
@@ -328,18 +365,130 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 			}
 		}
 
+		// The bars drawn before a menu rather than after everything, into whatever
+		// target the interface is drawing to (an upscaler may give the interface its
+		// own target). Once per frame, by whichever hooked menu renders first.
+		void DrawBeneath(std::string_view a_menu)
+		{
+			const auto frame = presentFrame.load(std::memory_order_relaxed);
+			if (beneathFrame.load(std::memory_order_relaxed) == frame || !resourcesReady) {
+				return;
+			}
+
+			auto* context = Context();
+			if (!context) {
+				return;
+			}
+
+			ComPtr<ID3D11RenderTargetView> bound;
+			context->OMGetRenderTargets(1, &bound, nullptr);
+			if (!bound) {
+				// Not marked as drawn, so Present draws this frame's bars on top.
+				if (beneathUnboundReported.Take()) {
+					Log::Warn(Log::Category::kRender,
+						"No render target bound when the {} drew; bars stay over the interface."sv, a_menu);
+				}
+				return;
+			}
+
+			ComPtr<ID3D11Resource> resource;
+			bound->GetResource(&resource);
+			ComPtr<ID3D11Texture2D> texture;
+			if (!resource || FAILED(resource.As(&texture)) || !texture) {
+				return;
+			}
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+
+			// Check the target's shape, not its size. A target with the frame's aspect is
+			// the interface going to the screen, directly or through an upscaler (under
+			// the PureDark upscaler the swap chain is 1280x720 while the UI draws to
+			// 1920x1080). Anything else is an off-screen texture; that frame is left to
+			// Present.
+			const float frameAspect = frameHeight > 0 ? static_cast<float>(frameWidth) / static_cast<float>(frameHeight) : 0.0f;
+			const float targetAspect = desc.Height > 0 ? static_cast<float>(desc.Width) / static_cast<float>(desc.Height) : 0.0f;
+			const bool  frameShaped = frameAspect > 0.0f && desc.Width >= 640 &&
+				std::abs(targetAspect - frameAspect) <= frameAspect * 0.02f;
+			if (!frameShaped) {
+				if (beneathMismatchReported.Take()) {
+					Log::Warn(Log::Category::kRender,
+						"The {} drew to a {}x{} target, not shaped like the {}x{} frame; bars stay over the interface on those frames."sv,
+						a_menu, desc.Width, desc.Height, frameWidth, frameHeight);
+				}
+				return;
+			}
+
+			beneathFrame.store(frame, std::memory_order_relaxed);
+
+			float height = 0.0f;
+			if (!Advance(height)) {
+				return;
+			}
+
+			const D3D11_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(desc.Width),
+				static_cast<float>(desc.Height), 0.0f, 1.0f };
+			Render(context, bound.Get(), &viewport, height);
+
+			if (beneathReported.Take()) {
+				Log::Info(Log::Category::kRender,
+					"Letterbox drawing beneath the interface, from the {} ({}x{} target; swap chain {}x{})."sv,
+					a_menu, desc.Width, desc.Height, frameWidth, frameHeight);
+			}
+		}
+
+		// IMenu::PostDisplay, which draws the menu's movie. One instantiation per menu
+		// so each keeps its own original.
+		template <std::size_t Slot>
+		struct PostDisplayHook
+		{
+			static void thunk(RE::IMenu* a_menu)
+			{
+				constexpr auto mine = Slot == 0 ? Letterbox::Beneath::kHud : Letterbox::Beneath::kDialogue;
+				if (beneath.load(std::memory_order_acquire) == mine && enabled.load(std::memory_order_acquire)) {
+					if constexpr (Slot == 1) {
+						const auto frame = presentFrame.load(std::memory_order_relaxed);
+						if (orderReported.Take()) {
+							Log::Info(Log::Category::kRender, "The HUD draws {} the dialogue menu{}."sv,
+								hudDrawnFrame.load(std::memory_order_relaxed) == frame ? "before"sv : "after"sv,
+								hudDrawnFrame.load(std::memory_order_relaxed) == frame ?
+									"; HUD elements stay under the bars"sv :
+									"; HUD elements will show over the bars"sv);
+						}
+					}
+					try {
+						DrawBeneath(Slot == 0 ? "HUD"sv : "dialogue menu"sv);
+					} catch (...) {
+						Disable("drawing beneath the interface threw an exception"sv);
+					}
+				}
+				func(a_menu);
+				if constexpr (Slot == 0) {
+					hudDrawnFrame.store(presentFrame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+				}
+			}
+
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		constexpr std::size_t kPostDisplayIndex = 0x6;
+
 		HRESULT STDMETHODCALLTYPE DetourPresent(IDXGISwapChain* a_swapChain, UINT a_sync, UINT a_flags)
 		{
 			const auto original = originalPresent.load(std::memory_order_acquire);
 
 			if (enabled.load(std::memory_order_acquire)) {
-				try {
-					Draw(a_swapChain);
-				} catch (...) {
-					Disable("draw threw an exception"sv);
+				const bool drawnBeneath = beneath.load(std::memory_order_acquire) != Letterbox::Beneath::kOff &&
+					beneathFrame.load(std::memory_order_relaxed) == presentFrame.load(std::memory_order_relaxed);
+				if (!drawnBeneath) {
+					try {
+						Draw(a_swapChain);
+					} catch (...) {
+						Disable("draw threw an exception"sv);
+					}
 				}
 			}
 
+			presentFrame.fetch_add(1, std::memory_order_relaxed);
 			return original ? original(a_swapChain, a_sync, a_flags) : E_FAIL;
 		}
 	}
@@ -382,32 +531,61 @@ float4 PSMain(VSOut i) : SV_TARGET { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
 		DWORD ignored = 0;
 		::VirtualProtect(slot, sizeof(void*), protection, &ignored);
 
+		// Installed at load rather than when the setting is first ticked, so the
+		// vtable isn't written while that menu is drawing. With the setting off each
+		// hook is one atomic load.
+		REL::Relocation<std::uintptr_t> hud{ RE::VTABLE_HUDMenu[0] };
+		PostDisplayHook<0>::func = hud.write_vfunc(kPostDisplayIndex, PostDisplayHook<0>::thunk);
+		REL::Relocation<std::uintptr_t> dialogue{ RE::VTABLE_DialogueMenu[0] };
+		PostDisplayHook<1>::func = dialogue.write_vfunc(kPostDisplayIndex, PostDisplayHook<1>::thunk);
+
 		installed.store(true, std::memory_order_release);
-		Log::Info(Log::Category::kRender, "Present hook installed for the letterbox."sv);
+		Log::Info(Log::Category::kRender,
+			"Present hook installed for the letterbox; HUD and dialogue menu hooks ready for bars beneath the interface."sv);
+	}
+
+	void Letterbox::SetBeneath(Beneath a_menu)
+	{
+		if (beneath.exchange(a_menu, std::memory_order_acq_rel) != a_menu) {
+			Log::Info(Log::Category::kRender, "Letterbox now draws {}."sv,
+				a_menu == Beneath::kDialogue ? "beneath the dialogue menu"sv :
+				a_menu == Beneath::kHud      ? "beneath the HUD"sv :
+											   "over the interface"sv);
+		}
+	}
+
+	float Letterbox::DrawnFraction() noexcept
+	{
+		return drawnFraction.load(std::memory_order_relaxed);
+	}
+
+	float Letterbox::TargetFraction() noexcept
+	{
+		const bool shown = enabled.load(std::memory_order_acquire) &&
+			wantVisible.load(std::memory_order_acquire) &&
+			!snapClosed.load(std::memory_order_acquire) &&
+			!screenTaken.load(std::memory_order_acquire);
+		return shown ? barFraction.load(std::memory_order_relaxed) : 0.0f;
 	}
 
 	void Letterbox::Shutdown()
 	{
-		// The bars are retracted rather than the hook removed. A render thread can
-		// already be inside the detour, and unhooking underneath it is how an
-		// overlay takes the game down on exit.
+		// Retract the bars rather than remove the hook; the render thread may be
+		// inside the detour.
 		wantVisible.store(false, std::memory_order_release);
 		enabled.store(false, std::memory_order_release);
 	}
 
 	void Letterbox::SetBarFraction(float a_fraction)
 	{
-		// Capped well below a half — two bars at 0.5 each would close the frame
-		// entirely, and a setting that can black out the screen is a bug report
-		// waiting to happen.
+		// Capped well below half, so the bars can't black out the frame.
 		barFraction.store(std::clamp(a_fraction, 0.0f, 0.30f), std::memory_order_relaxed);
 	}
 
 	void Letterbox::SetVisible(bool a_visible)
 	{
-		// Asking for the bars clears the snap. A conversation resuming after a
-		// trade eases them back in like any other; the snap is only ever a way of
-		// getting them off the screen faster than the ease could.
+		// Asking for the bars clears the snap, so a conversation resuming after a
+		// trade eases them back in normally.
 		if (a_visible) {
 			snapClosed.store(false, std::memory_order_release);
 		}

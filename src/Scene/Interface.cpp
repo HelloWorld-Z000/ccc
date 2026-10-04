@@ -9,28 +9,21 @@ namespace SD::Scene
 	{
 		bool suppressed{ false };
 
-		// What this mod took away, at the two levels it can take anything from.
-		//
-		// Two lists rather than one because the restore has to go back through the
-		// same parent it came from, and the parents are found differently: the base
-		// is one GetVariable, its children are GetMembers off that. Keeping paths
-		// instead would re-parse a string per child per frame for no gain.
+		// What this mod hid, at the two levels it hides from. Two lists because each
+		// is restored through its own parent (the base clip, or _root).
 		std::vector<std::string> hidden;      // children of HUDMovieBaseInstance
 		std::vector<std::string> hiddenRoot;  // children of _root that are not it
 
 		Log::OnceFlag            inventoryReported;
 
-		// Once per conversation, not once per attempt. Suppress() is retried every
-		// frame until it takes, and a warning on each of those would bury the log
-		// under the one conversation it went wrong in.
+		// Once per conversation: Suppress() is retried every frame until it works.
 		Log::OnceFlag            hudUnavailableReported;
 
-		// Same reasoning for the topic list's hand-back, which is now retried from
-		// the tick for as long as it keeps failing.
+		// Same for the topic list's hand-back, which is retried from the tick.
 		Log::OnceFlag            releaseFailedReported;
 
-		// A path inside DialogueMenu that is looked for until it is found, then
-		// remembered. See Resolve, below, for why it is not looked for just once.
+		// A path inside DialogueMenu that's looked for until it's found, then
+		// remembered. See Resolve for why it's retried.
 		struct PathProbe
 		{
 			std::string path;
@@ -38,64 +31,32 @@ namespace SD::Scene
 			bool        settled{ false };
 		};
 
-		// Two seconds at 60fps. Long enough to cover the menu building itself,
-		// short enough that a movie without the path is written off inside the
-		// first conversation.
+		// Two seconds at 60 fps: long enough for the menu to finish building.
 		constexpr int kProbeAttempts = 120;
 
-		// THE LINE. Everything else under HUDMovieBaseInstance goes.
+		// Children of HUDMovieBaseInstance that stay visible; everything else is
+		// hidden. These two are transient notifications rather than furniture, and
+		// hiding the movie means they're never drawn at all:
 		//
-		// The scene is worth protecting from FURNITURE — the compass, the meters,
-		// the crosshair, the activate prompt, the clock — all of which are
-		// permanently on screen and say nothing about this moment. These two are
-		// the opposite: they are transient, they are the game telling the player
-		// that something just happened, and swallowing one means the information is
-		// GONE rather than deferred. The movie is what queues a notification; hide
-		// the movie and it is never drawn and never comes back. Reported as items
-		// and quests not showing up during conversations.
+		//   MessagesBlock           - the notification stack (items received, gold,
+		//                             skill increases, "you cannot carry any more").
+		//   QuestUpdateBaseInstance - quest starts and objectives, level ups, and
+		//                             learning a shout word.
 		//
-		//   MessagesBlock           — the notification stack, whose one child is
-		//                             MessageText. Items received, gold, skill
-		//                             increases, "you cannot carry any more", and
-		//                             every other ShowMessage/ShowNotification.
-		//   QuestUpdateBaseInstance — more than its name says, and released for all
-		//                             of it. Its children are ObjectiveLineInstance,
-		//                             LevelUpTextInstance, LevelMeterBaseInstance
-		//                             and ShoutTextInstance: quest starts and
-		//                             objectives, levelling up, and learning a
-		//                             shout word. Everything the game announces.
+		// The names come from the hudmenu.swf files on this profile; HUD replacers
+		// keep them because the engine drives them by name (see
+		// RE::HUDObject::HudComponents).
 		//
-		// Both names, and both child lists, are read straight out of the three
-		// hudmenu.swf files on this profile by parsing their PlaceObject tags. All
-		// three place them at the same depths with the same character ids — every
-		// HUD replacer worth the name is an edit of vanilla's movie, and it cannot
-		// rename these without breaking the engine, which drives them by name from
-		// C++ (see RE::HUDObject::HudComponents, where kQuestUpdateBaseInstance is
-		// spelled out).
-		//
-		// SUBTITLES ARE NOT HERE, and that is not an oversight. HUDMenu's
-		// SubtitleTextHolder carries AMBIENT lines — passers-by, guards, the second
-		// NPC in the room. A staged conversation's own subtitle is drawn by
-		// DialogueMenu, which this never touches, so releasing HUDMenu's would not
-		// add the line being spoken; it would add everybody else's on top of it.
-		//
-		// Adding to this list is all that is needed to protect something else.
+		// HUDMenu's SubtitleTextHolder isn't here: it carries ambient lines from other
+		// NPCs. The conversation's own subtitle is drawn by DialogueMenu.
 		constexpr std::array kReleased{
 			"MessagesBlock"sv,
 			"QuestUpdateBaseInstance"sv,
 		};
 
-		// The backstop, for a movie the depth walk cannot read.
-		//
-		// The walk below is the primary discovery and this list is not consulted
-		// unless it comes back short — but "unless" is doing real work, because
-		// getInstanceAtDepth is an AS2 built-in and a movie is entitled to be
-		// stranger than the three on this profile.
-		//
-		// The first block is vanilla's roster, verified identical across SkyHUD,
-		// Edge UI and Edge UI Explorer Addon by parsing their PlaceObject tags. The
-		// second is the old shipped guess, kept because it costs one HasMember each
-		// and covers a HUD of some other lineage that the walk also failed on.
+		// Fallback names, for a movie the depth walk below can't read. The first block
+		// is vanilla's roster (identical in SkyHUD, Edge UI and Edge UI Explorer
+		// Addon); the second covers HUDs of some other lineage.
 		constexpr std::array kKnownChildren{
 			"TutorialLockInstance"sv,
 			"LocationLockBase"sv,
@@ -147,18 +108,22 @@ namespace SD::Scene
 			"RightMeters_mc"sv,
 		};
 
+		// Except while filming other NPCs: their lines are the HUD subtitle, and
+		// there's no dialogue menu to carry them. See SetKeepSubtitles.
+		bool keepSubtitles{ false };
+
 		[[nodiscard]] bool Released(std::string_view a_name)
 		{
+			if (keepSubtitles && a_name == "SubtitleTextHolder"sv) {
+				return true;
+			}
 			return std::find(kReleased.begin(), kReleased.end(), a_name) != kReleased.end();
 		}
 
-		// Menus that must survive. Everything else open during a conversation is an
-		// overlay the scene does not want.
-		//
-		// Compass Navigation Overhaul and True HUD draw their own menus rather than
-		// living inside HUDMenu, which is why hiding CompassShoutMeterHolder left a
-		// compass on screen. Unlike a movie's members, the menu table *is*
-		// enumerable, so this can be done properly instead of by guessing names.
+		// Menus that stay up. Every other menu open during a conversation is an
+		// overlay to hide. Compass and HUD mods (Compass Navigation Overhaul, True
+		// HUD) draw their own menus rather than living inside HUDMenu, and the menu
+		// table can be enumerated, so they're handled here.
 		constexpr std::array kKeepMenus{
 			"Dialogue Menu"sv,
 			"HUD Menu"sv,
@@ -176,13 +141,16 @@ namespace SD::Scene
 
 		std::vector<std::string> hiddenMenus;
 
-		// Foreign menus with one part the player should still see during a
-		// conversation. Every child of `parent` except `keep` is faded instead of
-		// the whole movie being hidden.
-		//
-		// TrueHUD draws all its widgets in one menu. Recent Loot (items received)
-		// is alone in TrueHUD_PartialVisibilityWidgets, which TrueHUD itself keeps
-		// up while the dialogue menu is open, hiding its bars.
+		// Spared menus already named in the log, so each is logged once.
+		std::vector<std::string> sparedReported;
+
+		// Logged once per session.
+		Log::OnceFlag            depthCapReported;
+
+		// Foreign menus with one part the player should still see. Every child of
+		// `parent` except `keep` is faded instead of hiding the whole movie. TrueHUD
+		// draws all its widgets in one menu; Recent Loot is alone in
+		// TrueHUD_PartialVisibilityWidgets, which TrueHUD keeps up during dialogue.
 		struct PartialKeep
 		{
 			std::string_view menu;
@@ -204,45 +172,23 @@ namespace SD::Scene
 		std::vector<FadedChild>  fadedChildren;
 		std::vector<std::string> partialMenus;
 
-		// The opacity below which the list is pulled out of Scaleform hit testing.
-		//
-		// This was 95, and that is the whole of what "it does not fade, it just
-		// snaps" was. _visible=false removes an object from RENDERING as well as
-		// from hit testing, so writing it at 95 meant the ease was only ever seen
-		// across its top five percent: the list vanished at 95 on the way out and
-		// popped back to full at 95 on the way in. Both directions read as a cut
-		// because both directions were one.
-		//
-		// 95 was the right number for a different job. It marked "readable enough
-		// to choose from" for the input guard, which had to agree with the Director
-		// about the word visible or a press fell between the two definitions. That
-		// guard no longer exists, and nothing now needs the list declared
-		// unavailable while it is still plainly on screen.
-		//
-		// A list at 1.5% has told the player nothing and can safely stop catching
-		// clicks. Everything above that is drawn, is legible, and stays clickable,
-		// which is exactly vanilla's behaviour for a list you can see.
+		// The opacity below which the list is taken out of hit testing. _visible=false
+		// also stops rendering, so a high threshold makes the fade snap; at 1.5% the
+		// list is effectively gone already.
 		constexpr float kListDrawnAlpha = 1.5f;
 
 		PathProbe choiceProbe;
 
-		// Frames between foreign-menu sweeps. Enforce() runs every staged frame,
-		// but walking ui->menuMap is the one part of it worth throttling — roughly
-		// four sweeps a second, which is far faster than a menu can open and be
-		// noticed and far slower than it would cost per frame.
+		// Frames between foreign-menu sweeps: about four a second, which is plenty for
+		// catching a newly opened menu.
 		constexpr int kSweepFrames = 15;
 		int           sweepCountdown{ 0 };
 
-		// The rows inside the topic list, read for the highlighted entry's text.
-		//
-		// Probed independently of choiceProbe, which is only ever driven from inside
-		// the fade and therefore not at all when bFadeTopicList is off. Sharing one
-		// would make reading the text depend on an unrelated feature being enabled.
+		// Rows inside the topic list, for the highlighted entry's text. A separate
+		// probe from choiceProbe, which only runs when the fade is on.
 		PathProbe                rowsProbe;
 
-		// Vanilla BSScrollingList names. Confirmed present by string-scanning
-		// Edge UI's dialoguemenu.swf, which is the live copy on this profile.
-		// Hoisted out of ReadSelectedTopic so the fingerprint reader shares them.
+		// Vanilla BSScrollingList names, also present in Edge UI's dialoguemenu.swf.
 		constexpr std::array kListPaths{
 			"_root.DialogueMenu_mc.TopicListHolder.List_mc"sv,
 			"_root.DialogueMenu_mc.TopicList.List_mc"sv,
@@ -250,44 +196,27 @@ namespace SD::Scene
 			"_root.DialogueMenu_mc.List_mc"sv,
 		};
 
-		// THE LAST RESORT, AND NO LONGER A SETTING.
-		//
-		// bHideHudWholesale used to put this on and the player chose between a clean
-		// frame and their notifications. Nobody should have to make that trade, and
-		// the keep-list means nobody does — so the flag is now only ever raised by
-		// Suppress giving up: a movie with no HUDMovieBaseInstance, or one whose
-		// children could not be found by walk or by name. Hiding the root then
-		// costs the notifications, which is bad, and leaves the whole HUD standing
-		// in every shot, which is worse.
-		//
-		// It stays a separate flag from `hidden` because it is undone differently:
-		// one _visible on the movie's root, not a walk back through named children.
+		// Last resort: hide the HUD's root. Only used when Suppress can't read the
+		// movie (no HUDMovieBaseInstance, or no children found by walk or name). It
+		// costs the notifications, but leaves a clean frame. Separate from `hidden`
+		// because it's restored differently.
 		bool hudHidden{ false };
 
-		// How many sweeps the fallback keeps asking for the children before it
-		// accepts the answer. Eight sweeps is two seconds, the same window
-		// kProbeAttempts gives every other probe in this file.
+		// How many sweeps the fallback keeps retrying for the children: two seconds,
+		// like kProbeAttempts.
 		constexpr int kRecoverySweeps = 8;
 		int           recoverySweeps{ 0 };
 
-		// The speaker's name, which is vanilla and not a UI replacer.
-		//
-		// Skyrim prints it beside the highlighted topic — "Arngeir" floating to the
-		// left of the list — and it is a *sibling* of TopicListHolder rather than a
-		// child of it. That is the whole bug: fading the topic list took the choices
-		// away and left the name hanging in an otherwise empty, letterboxed frame.
-		//
-		// Both DialogueMenu replacers checked (Edge UI, Dragonborn Voice Over) keep
-		// the vanilla `SpeakerName` member and its `SetSpeakerName` setter, so the
-		// same path covers a replaced menu as well as a stock one.
+		// The speaker's name, printed beside the highlighted topic. It's a sibling of
+		// TopicListHolder, so fading the list leaves it behind. Edge UI and Dragonborn
+		// Voice Over keep the vanilla `SpeakerName` member and `SetSpeakerName`, so
+		// the same path works for them.
 		PathProbe   nameProbe;
 		bool        hideSpeakerName{ true };
 
 		// Resolve a display object inside DialogueMenu by probing a list of paths.
-		// This CommonLibSSE still exposes GFxValue::ObjectVisitor with no method
-		// that drives it, so a movie's members cannot be listed and named candidates
-		// remain the only way in. Every path in this file goes through here so an
-		// unresolved one is reported the same way for each.
+		// CommonLibSSE's ObjectVisitor has nothing that drives it, so members can't be
+		// listed and named candidates are the only option.
 		[[nodiscard]] bool ResolvePath(
 			RE::GFxMovieView*                 a_view,
 			std::span<const std::string_view> a_candidates,
@@ -316,27 +245,11 @@ namespace SD::Scene
 			return false;
 		}
 
-		// True once the path is resolved and usable. False while it is still being
-		// looked for AND once the attempts are spent — callers treat both the same,
-		// because no path means no write either way.
-		//
-		// THE MISS USED TO LATCH ON THE FIRST FRAME, and that was silently costing
-		// whole features. Every site here set its `resolved` flag BEFORE probing, so
-		// one miss disabled that path for the rest of the session.
-		//
-		// One miss is exactly what the opening frames produce. The engine builds
-		// TopicListHolder a few frames AFTER DialogueMenu opens — the comment in
-		// SetChoiceAlpha about _visible being restored on rebuild is the same fact
-		// seen from the other side — and SD's first staged frame lands inside that
-		// gap often enough to matter. The movie had the path all along; it was asked
-		// a frame early, once, and never asked again. The fade, the speaker-name
-		// hide and ReadSelectedTopic all fail this way, and all three fail quietly:
-		// the fade just never runs, which reads as the setting doing nothing.
-		//
-		// So a miss now costs one frame, not a session. Bounded, because a movie
-		// that genuinely lacks the path must settle into "no" rather than probe
-		// forever, and the warning is held back until the last attempt so the log
-		// still gets exactly one line either way.
+		// True once the path is resolved and usable; false while still looking and
+		// once the attempts run out. A miss is retried for a while because the engine
+		// builds TopicListHolder a few frames after DialogueMenu opens, and the first
+		// staged frame can land in that gap. The warning is logged on the last attempt
+		// only.
 		[[nodiscard]] bool Resolve(
 			PathProbe&                        a_probe,
 			RE::GFxMovieView*                 a_view,
@@ -356,8 +269,8 @@ namespace SD::Scene
 			return !a_probe.path.empty();
 		}
 
-		// The menu clip, which owns eMenuState and bAllowProgress. One level above
-		// the topic list, not inside it.
+		// The menu clip, which owns eMenuState and bAllowProgress. One level above the
+		// topic list.
 		constexpr std::array kMenuPaths{
 			"_root.DialogueMenu_mc"sv,
 			"_root.DialogueMenu"sv,
@@ -373,8 +286,8 @@ namespace SD::Scene
 			"_root.SpeakerName"sv,
 		};
 
-		// Keep the movie alive until its managed GFxValue is released. Comparison
-		// includes both identities, since the same path can name a new clip.
+		// Keeps the movie alive until its GFxValue is released. Compares both, since
+		// the same path can name a new clip.
 		struct DialogueNode
 		{
 			RE::GPtr<RE::GFxMovieView> movie;
@@ -421,8 +334,8 @@ namespace SD::Scene
 			auto* ui = RE::UI::GetSingleton();
 			auto view = ui ? ui->GetMovieView(RE::DialogueMenu::MENU_NAME) : nullptr;
 			if (view.get() != probedMovie.get()) {
-				// Restore only retained objects in the outgoing movie, even if UI
-				// no longer exposes it. No debt or failed path probe crosses movies.
+				// Restore only objects retained from the outgoing movie, even if the UI no
+				// longer exposes it. No debt or failed probe carries over to a new movie.
 				choiceOverride.Reset();
 				nameOverride.Reset();
 				choiceProbe = {};
@@ -471,8 +384,7 @@ namespace SD::Scene
 			return true;
 		}
 
-		// Everything still on screen after the pass, so a straggler can be named
-		// rather than hunted for in a screenshot.
+		// Logs everything still on screen after the pass.
 		void LogRemainingMenus()
 		{
 			auto* ui = RE::UI::GetSingleton();
@@ -506,39 +418,17 @@ namespace SD::Scene
 				remaining.empty() ? "<none>"s : remaining);
 		}
 
-		// CAN THE PLAYER USE THIS MENU? IF SO IT IS NOT THIS MOD'S TO HIDE.
+		// Can the player interact with this menu? If so, don't hide it.
 		//
-		// The sweep below existed to clear ambient widgets — a compass replacer, a
-		// stamina bar, a durability readout — and the thing standing between it and
-		// everything else was kKeepMenus, a list of twelve names. That list is what
-		// this mod must not touch; it was never a list of what the PLAYER might
-		// need, and there is no version of it that could be. Any mod may register
-		// any menu under any name.
+		// The sweep exists to clear passive widgets (compass replacers, stat bars,
+		// durability readouts). A menu that pauses the game, is modal, wants the
+		// cursor or takes the menu control context is something the player is expected
+		// to answer, like a follower framework's confirmation box; hiding one leaves
+		// the player with no way to respond. Erring toward keeping a menu just leaves
+		// a widget on screen.
 		//
-		// Reported against 1.3.5: a follower framework's dialogue option puts up a
-		// confirmation box, the sweep did not recognise the name, and the box was
-		// hidden and then held hidden by the reassert — leaving a conversation with
-		// no options, no HUD and an invisible prompt waiting for an answer. It only
-		// began in 1.3.5 because before that the whole sweep sat behind
-		// bHideInterface, and the reporter had it off.
-		//
-		// A menu that pauses the game, claims modality, wants the cursor, or takes
-		// the menu control context is a menu somebody is expected to answer. None
-		// of those describe a widget: measured against every menu this mod has
-		// actually hidden on this profile — TrueHUD, CastingBar, Durability Menu,
-		// Floating Damage, BTPS, SkyParkour and seven status widgets — not one is
-		// anything but a passive overlay.
-		//
-		// The flag bits are read straight off menuFlags rather than through IMenu's
-		// accessors: several of those are wired to the wrong enumerator in this
-		// CommonLibSSE (UsesCursor returns kUsesMenuContext, UsesMenuContext returns
-		// kUsesMovementToDirection, and so on down the block). PausesGame is correct
-		// and is the only one used elsewhere in this mod.
-		//
-		// The two failure directions are not equal, and that is the whole argument
-		// for erring wide. Guess wrong here and a widget stays on screen through a
-		// conversation. Guess wrong the other way and the player is staring at
-		// somebody with no way to answer the question they were just asked.
+		// The flag bits are read directly from menuFlags: several of IMenu's accessors
+		// in this CommonLibSSE test the wrong enumerator. PausesGame is correct.
 		[[nodiscard]] bool PlayerFacing(RE::IMenu* a_menu)
 		{
 			using Flag = RE::UI_MENU_FLAGS;
@@ -561,9 +451,9 @@ namespace SD::Scene
 		}
 
 		// Fades every child of a_keep.parent except a_keep.keep. Uses _alpha, not
-		// _visible, because TrueHUD sets _visible on these containers itself on
-		// every menu change. Returns false if the parent can't be found, so the
-		// caller can hide the whole movie instead.
+		// _visible, because TrueHUD sets _visible on these containers itself on every
+		// menu change. Returns false if the parent can't be found, so the caller can
+		// hide the whole movie instead.
 		[[nodiscard]] bool FadeAllBut(RE::IMenu* a_menu, std::string_view a_menuName, const PartialKeep& a_keep)
 		{
 			auto view = a_menu ? a_menu->uiMovie : nullptr;
@@ -637,16 +527,15 @@ namespace SD::Scene
 				}
 
 				if (PlayerFacing(entry.second.menu.get())) {
-					// Named in the log, and only when it is on screen: a menu the
-					// player cannot see is not evidence of anything, and a list of
-					// every dormant registration would be noise. If a widget ever
-					// survives a conversation it should turn up here, which is the
-					// one line needed to move it across.
+					// Logged only when it's on screen, so dormant registrations don't clutter the
+					// log. A widget that survives a conversation shows up here.
 					RE::GFxValue root;
 					RE::GFxValue visible;
 					auto         view = entry.second.menu ? entry.second.menu->uiMovie : nullptr;
 					if (view && view->GetVariable(&root, "_root") && root.IsDisplayObject() &&
-						(!root.GetMember("_visible", &visible) || !visible.IsBool() || visible.GetBool())) {
+						(!root.GetMember("_visible", &visible) || !visible.IsBool() || visible.GetBool()) &&
+						std::find(sparedReported.begin(), sparedReported.end(), name) == sparedReported.end()) {
+						sparedReported.push_back(name);
 						if (!spared.empty()) {
 							spared += ", ";
 						}
@@ -655,7 +544,7 @@ namespace SD::Scene
 					continue;
 				}
 
-				// Already held, either way: ReassertForeignMenus keeps it.
+				// Already held either way; ReassertForeignMenus keeps it.
 				const bool heldWhole = std::find(hiddenMenus.begin(), hiddenMenus.end(), name) != hiddenMenus.end();
 				const bool heldPartly = std::find(partialMenus.begin(), partialMenus.end(), name) != partialMenus.end();
 				if (heldPartly) {
@@ -673,14 +562,8 @@ namespace SD::Scene
 					continue;
 				}
 
-				// Guarded because this now runs repeatedly rather than once.
-				//
-				// onlyIfShown already skips anything currently hidden, so a menu
-				// this mod took away is passed over on the next sweep — but a menu
-				// its owner shows again BETWEEN sweeps comes back through here, and
-				// an unguarded push would file it twice. Restore() would then set it
-				// visible twice, which is harmless, and the list would grow for as
-				// long as the conversation ran, which is not.
+				// A menu its owner shows again between sweeps comes back through here, so
+				// don't add it twice.
 				if (std::find(hiddenMenus.begin(), hiddenMenus.end(), name) == hiddenMenus.end()) {
 					hiddenMenus.push_back(name);
 				}
@@ -701,10 +584,8 @@ namespace SD::Scene
 			}
 		}
 
-		// Push the hide again on menus already taken, which the sweep above cannot
-		// do: it asks onlyIfShown so it never touches something already hidden, and
-		// everything here is already hidden — by us. Separating the two is what
-		// lets one function find newcomers and the other hold what it has.
+		// Re-apply the hide on menus already taken. The sweep above skips anything
+		// already hidden (by design), so this is what holds them.
 		void ReassertForeignMenus()
 		{
 			auto* ui = RE::UI::GetSingleton();
@@ -765,36 +646,20 @@ namespace SD::Scene
 			return view->GetVariable(&a_root, "_root") && a_root.IsDisplayObject();
 		}
 
-		// WHERE A TIMELINE CHILD'S DEPTH LIVES.
-		//
-		// Flash puts objects placed on a timeline into a reserved band starting at
-		// -16384, in the order the swf's PlaceObject tags give them. Vanilla's
-		// hudmenu.swf places its twenty-nine children across swf depths 1 to 290,
-		// which is -16383 to -16094 here. A thousand covers that four times over
-		// and still costs one pass.
+		// Timeline children live in a reserved depth band starting at -16384, in
+		// PlaceObject order. Vanilla's hudmenu.swf places its 29 children at swf
+		// depths 1 to 290, so a thousand covers it with plenty of margin.
 		constexpr std::int32_t kTimelineBase = -16384;
 		constexpr std::int32_t kTimelineSpan = 1024;
 
-		// The other band: anything attachMovie'd at runtime, which lands at zero and
-		// above. Walked separately because its extent is only known by asking, and
-		// bounded because the answer is somebody else's number.
+		// The other band: anything attachMovie'd at runtime, at zero and above.
+		// Bounded because the extent comes from someone else's movie.
 		constexpr std::int32_t kAttachedCap = 256;
 
-		// EVERY CHILD, BY ASKING THE MOVIE RATHER THAN BY GUESSING.
-		//
-		// GFxValue::ObjectInterface still exposes ObjVisitor with no method that
-		// drives it, so members genuinely cannot be listed — which is what pushed
-		// both previous versions of this file into writing names down in advance.
-		//
-		// But a display object does not have to be enumerated to be found. AS2's
-		// MovieClip carries getInstanceAtDepth, and a depth is a number this side
-		// can count through: walk the band, ask for whatever is standing at each
-		// depth, read its _name. That is the enumeration, one Invoke at a time, and
-		// it is correct for a movie nobody here has ever seen.
-		//
-		// Returns false only when the walk itself did not work — no hits at all —
-		// which is the caller's cue to fall back rather than to believe in an empty
-		// HUD.
+		// Every child, found by asking the movie. Members can't be listed, but AS2's
+		// getInstanceAtDepth can be called for each depth and the result's _name read,
+		// which works for any HUD. Returns false only when the walk found nothing at
+		// all, so the caller falls back.
 		[[nodiscard]] bool EnumerateChildren(RE::GFxValue& a_parent, std::vector<std::string>& a_out)
 		{
 			const auto collect = [&](std::int32_t a_depth) {
@@ -827,8 +692,8 @@ namespace SD::Scene
 				collect(kTimelineBase + i);
 			}
 
-			// getNextHighestDepth answers zero when everything is on the timeline,
-			// so the common case pays nothing for this second band at all.
+			// getNextHighestDepth returns zero when everything is on the timeline, so the
+			// common case skips this band.
 			RE::GFxValue next;
 			if (a_parent.Invoke("getNextHighestDepth", &next, nullptr, 0) && next.IsNumber()) {
 				const auto top = static_cast<std::int32_t>(next.GetNumber());
@@ -837,10 +702,8 @@ namespace SD::Scene
 					collect(d);
 				}
 
-				// Said out loud rather than trimmed quietly: a capped walk is a walk
-				// that may have left something on screen, and the number that would
-				// have covered it is right here.
-				if (top > kAttachedCap) {
+				// Logged so it's clear a capped walk may have left something visible.
+				if (top > kAttachedCap && depthCapReported.Take()) {
 					Log::Warn(Log::Category::kStaging,
 						"HUD depth walk stopped at {} of {} attached depths; anything above may stay visible."sv,
 						kAttachedCap, top);
@@ -850,15 +713,9 @@ namespace SD::Scene
 			return a_out.size() > before;
 		}
 
-		// THE HIDE ITSELF: find the movie's children, take everything not released.
-		//
-		// Returns false when the movie could not be read at all — no base clip, or a
-		// base clip whose children answered to neither the walk nor a name. Only the
-		// caller knows what to do about that, and both callers do something
-		// different, which is why this reports rather than decides.
-		//
-		// a_report gates the inventory logging so the recovery attempt in Enforce
-		// can run quietly. It is the same work either way.
+		// Find the movie's children and hide everything not released. Returns false
+		// when the movie couldn't be read at all; the two callers handle that
+		// differently. a_report controls logging so the retry in Enforce is quiet.
 		[[nodiscard]] bool ApplyKeepList(bool a_report)
 		{
 			RE::GPtr<RE::IMenu> menu;
@@ -870,15 +727,10 @@ namespace SD::Scene
 			hidden.clear();
 			hiddenRoot.clear();
 
-			// The walk first, then the names — and the names are not a fallback for
-			// a SHORT walk, only for a failed one.
-			//
-			// A walk that finds twenty-nine children and a name list that knows
-			// about forty-seven disagree constantly and correctly: this movie simply
-			// does not have the other eighteen. Running both and taking the union
-			// costs one GetMember each and covers the case where getInstanceAtDepth
-			// skipped something — text fields are placed at depths like everything
-			// else, but Flash's own documentation only promises MovieClips back.
+			// Walk first, then names, and use the union. A name list that knows more
+			// children than the movie has is normal; the names only matter if the walk
+			// skipped something (Flash only promises MovieClips back from
+			// getInstanceAtDepth).
 			std::vector<std::string> children;
 			const bool               walked = EnumerateChildren(base, children);
 
@@ -917,8 +769,8 @@ namespace SD::Scene
 					continue;
 				}
 
-				// Leave anything already hidden alone, so restoring cannot switch on
-				// an element the player or another mod deliberately turned off.
+				// Skip anything already hidden, so restoring can't show an element the player
+				// or another mod turned off.
 				RE::GFxValue visible;
 				if (member.GetMember("_visible", &visible) && visible.IsBool() && !visible.GetBool()) {
 					continue;
@@ -933,13 +785,9 @@ namespace SD::Scene
 				taken += name;
 			}
 
-			// One level up, for whatever else is sharing the movie with the base
-			// clip.
-			//
-			// Vanilla puts exactly one named child on _root and it is
-			// HUDMovieBaseInstance, so this normally hides nothing at all. It exists
-			// for the mod that attaches its widget beside the base rather than
-			// inside it, which is a place the by-name pass could never have looked.
+			// One level up, for anything sharing _root with the base clip. Vanilla has
+			// only HUDMovieBaseInstance there, so this normally hides nothing; it's for
+			// mods that attach widgets beside the base clip.
 			RE::GPtr<RE::IMenu> rootMenu;
 			RE::GFxValue        root;
 			if (AcquireRoot(rootMenu, root)) {
@@ -977,13 +825,8 @@ namespace SD::Scene
 				Log::Info(Log::Category::kStaging, "HUD children released: {}"sv,
 					kept.empty() ? "<nothing>"s : kept);
 
-				// Every released name this movie does not have, said once.
-				//
-				// The interesting failure is not a hidden element — those are named
-				// above and can be moved across the line by editing kReleased. It is
-				// a released one that was never there, because the symptom is a
-				// notification quietly missing with nothing on screen to suggest
-				// this mod had anything to do with it.
+				// Log each released name this movie doesn't have, once. A missing released
+				// element shows up as a notification quietly not appearing.
 				for (const auto& release : kReleased) {
 					const std::string key{ release };
 					if (std::find(children.begin(), children.end(), key) == children.end()) {
@@ -997,20 +840,12 @@ namespace SD::Scene
 			Log::Info(Log::Category::kStaging, "HUD suppressed; {} element(s) hidden, {} released."sv,
 				hidden.size() + hiddenRoot.size(), keptCount);
 
-			// NOT RE-WALKED ON THE SWEEP, and that is a decision rather than an
-			// omission. Timeline children are fixed by the swf and cannot appear
-			// later; a runtime attachMovie into HUDMenu happens when the movie is
-			// built, which is before any conversation, so the walk here already has
-			// it. A menu that opens mid-conversation is the case that does need
-			// catching, and SuppressForeignMenus catches it.
+			// Not re-walked on each sweep: timeline children are fixed and runtime
+			// attachments happen when the movie is built. Menus opening mid-conversation
+			// are caught by SuppressForeignMenus.
 			//
-			// TRUE MEANS THE MOVIE WAS READ, NOT THAT SOMETHING WAS TAKEN.
-			//
-			// A HUD whose every element was already hidden by its owner — iHUD with
-			// everything faded out, a replacer mid-rebuild — leaves both lists empty
-			// and is nonetheless perfectly understood. Reporting that as a failure
-			// would send the caller to the wholesale hide, which would take the
-			// notifications away to solve a problem that does not exist.
+			// True means the movie was read, not that anything was hidden; a HUD whose
+			// elements were all already hidden is fine and shouldn't trigger the fallback.
 			return true;
 		}
 	}
@@ -1021,24 +856,19 @@ namespace SD::Scene
 			return;
 		}
 
-		// A full interval before the first re-sweep. This pass has just walked the
-		// whole map, so the next frame has nothing new to find.
+		// A full interval before the first re-sweep; this pass just walked the map.
 		sweepCountdown = kSweepFrames;
 
-		// Before the HUD, because the branch below can return early and the name
-		// lives in DialogueMenu, which survives either path.
+		// Before the HUD, since the branch below can return early and the name lives
+		// in DialogueMenu.
 		if (hideSpeakerName) {
 			SetNameAlpha(0.0f);
 		}
 
 		if (!HudMenu()) {
-			// Returns WITHOUT marking the conversation suppressed, on purpose: the
-			// caller retries every frame until the movie turns up, which is how a HUD
-			// that is not registered yet on the frame a conversation stages gets
-			// hidden at all rather than staying up for the whole of it.
-			//
-			// Which is also why the warning is taken once per conversation and not
-			// once per attempt. RestoreHud resets it.
+			// Returns without marking the conversation suppressed, so the caller retries
+			// each frame until the HUD movie is available. Warned once per conversation;
+			// RestoreHud resets it.
 			if (hudUnavailableReported.Take()) {
 				Log::Warn(Log::Category::kStaging,
 					"HUD movie unavailable; retrying until it appears."sv);
@@ -1046,14 +876,9 @@ namespace SD::Scene
 			return;
 		}
 
-		// GIVING UP IS LOUD, IMMEDIATE, AND NOT FINAL.
-		//
-		// An empty child list is not an empty HUD. It is a movie this could not
-		// read, and the choice is between leaving the whole HUD standing through
-		// every shot and hiding the root, which costs the notifications. The root
-		// goes, because a clean frame is what the mod is for — but the frame it was
-		// asked on is not evidence about the frame after it, so Enforce keeps
-		// asking, and hands the notifications back the moment the answer changes.
+		// If the movie can't be read, hide its root (losing notifications) rather than
+		// leave the whole HUD in every shot. Enforce keeps retrying and restores the
+		// notifications once it can read the children.
 		if (!ApplyKeepList(true)) {
 			if (auto hud = HudMenu(); hud && SetMovieVisible(hud.get(), false, true)) {
 				hudHidden = true;
@@ -1077,20 +902,15 @@ namespace SD::Scene
 			return;
 		}
 
-		// The wholesale hide, re-pushed every frame with onlyIfShown OFF.
-		//
-		// It has to be off: the movie is already hidden — by us — so the guard that
-		// stops this mod stealing something another mod hid would also stop it
-		// holding what it took. The guard did its job once, at Suppress(), and
-		// hudHidden is the record that it said yes.
+		// The root hide, reapplied every frame with onlyIfShown off: it's already
+		// hidden by us, so the guard would stop it holding.
 		if (hudHidden) {
 			static_cast<void>(SetMovieVisible(HudMenu().get(), false, false));
 		}
 
-		// The children, same reasoning. Only elements this mod actually hid are in
-		// these two lists, so nothing here can turn off something that was already
-		// off — and nothing here can reach a released element, which is why a
-		// notification is free to show itself mid-conversation.
+		// Same for the children. Only elements this mod hid are in these lists, so
+		// nothing that was already off gets touched and released elements are never
+		// reached.
 		if (!hidden.empty()) {
 			RE::GPtr<RE::IMenu> menu;
 			RE::GFxValue        base;
@@ -1117,9 +937,8 @@ namespace SD::Scene
 			}
 		}
 
-		// Menus are the throttled half. Walking ui->menuMap is the only part of
-		// this that scales with what else is installed, and a menu that opens
-		// mid-conversation can afford to be caught a quarter of a second later.
+		// Menus are the throttled part; walking ui->menuMap scales with what's
+		// installed.
 		if (--sweepCountdown > 0) {
 			return;
 		}
@@ -1128,30 +947,12 @@ namespace SD::Scene
 		SuppressForeignMenus();   // newcomers
 		ReassertForeignMenus();   // what we already hold
 
-		// ASK AGAIN FOR THE CHILDREN, FOR AS LONG AS IT IS WORTH ASKING.
-		//
-		// Suppress hid the whole movie because it could not read it, and a movie is
-		// entitled not to be readable on the frame a conversation stages: HUDMenu is
-		// a menu like any other and need not be registered yet — after a cell load,
-		// on a fast travel arrival, or while a HUD replacer rebuilds it — and a base
-		// clip that has resolved may still be a frame away from having placed its
-		// children.
-		//
-		// A wholesale hide taken on that frame used to be the answer for the rest of
-		// the conversation, which is a notification lost to a timing accident. Here
-		// it is a holding position: the keep-list is tried again every sweep, and the
-		// frame it succeeds on is the frame the root comes back and the notifications
-		// with it.
-		//
-		// Bounded, because a movie that genuinely cannot be read must settle rather
-		// than pay for the walk four times a second forever. Two seconds of sweeps is
-		// the same window every other probe in this file gets.
-		// Gated on the countdown, NOT on hudHidden. The fallback sets both, but it
-		// can only set hudHidden if there was a movie to hide — and the case that
-		// most needs retrying is the one where there was not: HUDMenu registered but
-		// its uiMovie or its base clip not resolving yet. That path leaves hudHidden
-		// false with nothing hidden at all, which is the worst state to stop asking
-		// in.
+		// Keep retrying the children while the root hide is in place. HUDMenu may not
+		// be ready on the frame a conversation stages (after a cell load, on arrival
+		// from fast travel, or while a HUD replacer rebuilds), and the root comes back
+		// with the notifications as soon as it succeeds. Bounded to two seconds. Gated
+		// on the countdown rather than hudHidden, because the case that most needs a
+		// retry (no movie to hide yet) leaves hudHidden false.
 		if (recoverySweeps > 0) {
 			--recoverySweeps;
 
@@ -1175,8 +976,8 @@ namespace SD::Scene
 		}
 		SetNameAlpha(hideSpeakerName ? 0.0f : a_alpha);
 
-		// Only a positively identified topic holder may be faded. Never touch
-		// the menu root, subtitles, list rows, or the movie's input/progress gates.
+		// Only a positively identified topic holder may be faded. Never the menu root,
+		// subtitles, list rows, or the movie's input/progress gates.
 		constexpr std::array kTopicPaths{
 			"_root.DialogueMenu_mc.TopicListHolder"sv,
 			"_root.DialogueMenu_mc.TopicList"sv,
@@ -1193,8 +994,8 @@ namespace SD::Scene
 		}
 		choiceOverride.Bind({ view, node });
 		const float wanted = std::clamp(a_alpha, 0.0f, 100.0f);
-		// Ending a fade releases only our writes. A new menu's initial alpha
-		// and visibility belong to its construction/transition animation.
+		// Ending a fade releases only our writes. A new menu's initial alpha and
+		// visibility belong to its own construction and transitions.
 		const bool alphaDone = choiceOverride.SetAlpha(static_cast<double>(wanted));
 		const bool visibleDone = choiceOverride.SetHidden(wanted < kListDrawnAlpha);
 		return alphaDone && visibleDone;
@@ -1227,9 +1028,8 @@ namespace SD::Scene
 			return {};
 		}
 
-		// selectedEntry first: it is what the row under the highlight actually
-		// holds. entryList[selectedIndex] is the fallback for a list that exposes
-		// the array but not the convenience accessor.
+		// selectedEntry first: it's what the highlighted row actually holds.
+		// entryList[selectedIndex] is the fallback.
 		RE::GFxValue entry;
 		if (list.GetMember("selectedEntry", &entry) && entry.IsObject()) {
 			RE::GFxValue text;
@@ -1281,10 +1081,8 @@ namespace SD::Scene
 			return 0;
 		}
 
-		// FNV-1a over the row texts, plus the row count. Cheap, and it does not
-		// need to be cryptographic — the only question ever asked of it is
-		// "are these the same rows as a moment ago", where the alternative to a
-		// collision is a single frame of a stale list.
+		// FNV-1a over the row texts plus the row count. Only used to answer "same rows
+		// as a moment ago?".
 		std::uint64_t hash = 14695981039346656037ull;
 		const auto    mix = [&hash](std::uint8_t a_byte) {
 			hash ^= a_byte;
@@ -1304,9 +1102,7 @@ namespace SD::Scene
 			mix(0x1F);  // row separator, so ["ab","c"] and ["a","bc"] differ
 		}
 
-		// 0 is reserved for "could not be read", which callers must not confuse
-		// with a legitimate hash — the same distinction LipSync's Sample lost and
-		// spent a week paying for.
+		// 0 means "couldn't be read", so a real hash of 0 becomes 1.
 		return hash ? hash : 1;
 	}
 
@@ -1328,27 +1124,26 @@ namespace SD::Scene
 			return out;
 		}
 
-		// Both members are read independently. A movie that has one and not the
-		// other is still worth half an answer, and saying so beats guessing.
+		// Read both members independently; voice readiness alone doesn't say whether
+		// the movie has a supported topic-list state.
+		std::optional<double> menuState;
 		RE::GFxValue state;
 		if (node.GetMember("eMenuState", &state) && state.IsNumber()) {
-			switch (static_cast<int>(state.GetNumber())) {
-			case 0:  out.phase = MenuPhase::kGreeting; break;
-			case 1:  out.phase = MenuPhase::kTopicList; break;
-			case 2:  out.phase = MenuPhase::kTopicClicked; break;
-			case 3:  out.phase = MenuPhase::kTransitioning; break;
-			default: out.phase = MenuPhase::kUnknown; break;
-			}
-			out.valid = true;
+			menuState = state.GetNumber();
 		}
 
+		std::optional<bool> allowProgress;
 		RE::GFxValue allow;
 		if (node.GetMember("bAllowProgress", &allow) && allow.IsBool()) {
-			out.lineInFlight = !allow.GetBool();
-			out.valid = true;
+			allowProgress = allow.GetBool();
 		}
 
-		return out;
+		return DialoguePhase::FromMovie(menuState, allowProgress);
+	}
+
+	void Interface::SetKeepSubtitles(bool a_keep)
+	{
+		keepSubtitles = a_keep;
 	}
 
 	void Interface::SetHideSpeakerName(bool a_hide)
@@ -1358,13 +1153,8 @@ namespace SD::Scene
 		}
 		hideSpeakerName = a_hide;
 
-		// Switching it OFF has to put the name back here and now.
-		//
-		// The name is otherwise only ever written from inside SetChoiceAlpha, and
-		// SetChoiceAlpha only runs while the fade or the HUD hide is on. Turn the
-		// name hide off in the menu while both of those are off and nothing would
-		// ever write 100 to it — the name would stay invisible for the rest of the
-		// conversation, and the control would read as broken.
+		// Switching it off has to restore the name right away; otherwise nothing
+		// writes it again until the conversation ends.
 		if (!a_hide) {
 			SetNameAlpha(100.0f);
 		}
@@ -1372,9 +1162,7 @@ namespace SD::Scene
 
 	void Interface::RestoreHud()
 	{
-		// Armed for the next conversation whether or not this one suppressed
-		// anything — RestoreHud is called on every close, and a warning owed to a
-		// conversation that never got its HUD is owed again to the next one.
+		// Re-armed for the next conversation on every close.
 		hudUnavailableReported.Reset();
 
 		if (!suppressed) {
@@ -1423,8 +1211,8 @@ namespace SD::Scene
 
 	void Interface::ReleaseChoices()
 	{
-		// Observe replacement before considering a retry. Restoration itself
-		// uses retained object handles, never a path in whichever movie is now up.
+		// Check for a replaced movie before retrying. Restoration uses retained object
+		// handles, never a path in whatever movie is up now.
 		static_cast<void>(DialogueView());
 		const bool choicesDone = choiceOverride.Release();
 		const bool nameDone = nameOverride.Release();
@@ -1440,9 +1228,8 @@ namespace SD::Scene
 
 	void Interface::Restore()
 	{
-		// Both halves, unconditionally. Each is idempotent and each guards itself,
-		// which is the point of splitting them: Close() does not have to know which
-		// features were on.
+		// Both halves, always. Each is idempotent, so Close() doesn't need to know
+		// which features were on.
 		RestoreHud();
 		ReleaseChoices();
 	}

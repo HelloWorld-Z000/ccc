@@ -9,36 +9,17 @@ namespace SD::Camera
 {
 	namespace
 	{
-		// THREE LOOKS, AND THE REASON THERE ARE NOT FIVE.
+		// Three looks, each with two to four setups per side of the exchange and a
+		// cadence of two to five lines. Longer shot lists start overlapping and stop
+		// having a character, and cutting on every line makes every look feel the
+		// same.
 		//
-		// There were five, each carrying twelve to sixteen setups, and they blurred
-		// into one another. Two causes, and neither was the writing:
-		//
-		//   A LIST OF SIXTEEN IS NOT A LOOK. Past about ten setups a preset stops
-		//   having a character and starts being a sample of the whole table — and
-		//   the more of the table two presets each take, the more they overlap. Up
-		//   Close and Over the Shoulder shared eight setups between them.
-		//
-		//   CUTTING EVERY LINE FLATTENS WHATEVER IS LEFT. All five shipped a cadence
-		//   of one, so every look changed angle on every line and the rhythm — the
-		//   thing you actually feel — was identical across all of them.
-		//
-		// So: three looks, two to four setups per side of the exchange, and a
-		// cadence between two and five lines. Each one is now short enough to
-		// describe in a sentence, which is the real test of whether it is a look at
-		// all.
-		//
-		// Every list is built in PAIRS. A reverse shot answers the shot it follows
-		// at a matching size, and the surest way to lose that is a list that stocks
-		// one side of the eyeline better than the other: the camera comes back to
-		// the same angle every time the turn passes, and the look reads as thin on
-		// exactly half of the conversation.
+		// Every list is built in pairs, so a reverse can answer the shot it follows at
+		// a matching size.
 
-		// ---- Standard -------------------------------------------------------
+		// ---- Standard ----------------------------------------------------------
 		//
-		// Shoulder, single, reverse, and a shot of the pair to breathe. The way
-		// films have shot conversations for a century, and the reason you never
-		// notice it.
+		// Shoulder, single, reverse, and a shot of the pair. Classic coverage.
 		constexpr std::array kStandard{
 			ShotType::kOverPlayerShoulder, ShotType::kCloseUp,
 			ShotType::kMediumNpc, ShotType::kThreeQuarterNpc,
@@ -49,20 +30,14 @@ namespace SD::Camera
 			ShotType::kTwoShot, ShotType::kProfile,
 		};
 
-		// ---- Close ----------------------------------------------------------
+		// ---- Close -------------------------------------------------------------
 		//
-		// THE SHIPPED LOOK, and the shortest list in the mod: six setups.
+		// The default look, and the shortest list: a shoulder shot to place the two of
+		// you, a close single and an extreme close-up on each side, and one rarely
+		// drawn room shot.
 		//
-		// Rebuilt for 1.4 and cut from ten. A conversation is two faces, and this
-		// look says so — a shoulder to place the two of you, a close single on each
-		// side, an extreme on each side for the lines somebody means, and exactly
-		// one shot of the room, drawn rarely, so the eye has somewhere to land
-		// without the look stopping being close.
-		//
-		// EVERY DEFAULT IN THE MOD POINTS AT THIS LIST. See DefaultPreset: the
-		// settings loader falls back to these setups' own lenses, weights, moves
-		// and lighting, so a fresh profile reads as Close with nothing in
-		// SD_user.ini at all.
+		// Every default in the mod points at this list (see DefaultPreset), so a fresh
+		// profile reads as Close with nothing in SD_user.ini.
 		constexpr std::array kClose{
 			ShotType::kOverPlayerShoulder, ShotType::kCloseUp, ShotType::kExtremeClose,
 
@@ -71,17 +46,14 @@ namespace SD::Camera
 			ShotType::kDistant,
 		};
 
-		// ---- Room -----------------------------------------------------------
+		// ---- Room --------------------------------------------------------------
 		//
-		// Where this is happening, first; who is saying it, second.
+		// The space first, the speaker second.
 		//
-		// THE MEDIUM AND THE THREE-QUARTER ARE LOAD-BEARING, not filler. Every
-		// other setup in this list is gated behind `roomy`, so in a corridor or a
-		// small cell they are all switched off at once — and without a pair of
-		// angles that need no room, this preset would collapse to a single
-		// repeated shot per side in exactly the interiors most of Skyrim is made
-		// of. They are the floor under the look, weighted low so they stay out of
-		// the way anywhere the room actually opens up.
+		// The medium and the three-quarter are there because every other setup here
+		// needs `roomy`; without them this preset would collapse to one shot per side
+		// in corridors and small rooms. Weighted low so they stay out of the way when
+		// the room opens up.
 		constexpr std::array kRoom{
 			ShotType::kLongNpc, ShotType::kOverhead,
 			ShotType::kMediumNpc, ShotType::kThreeQuarterNpc,
@@ -93,23 +65,15 @@ namespace SD::Camera
 			ShotType::kDistant, ShotType::kTwoShot,
 		};
 
-		// ---- The glass ------------------------------------------------------
+		// ---- Lenses ------------------------------------------------------------
 		//
-		// The column that separates one look from another, and the one a preset
-		// could not reach before it existed: two presets drawing the same setup
-		// were shooting it identically whatever their descriptions claimed.
+		// Standard runs 50-72, Close 40-62, Room 45-95. Every setup a preset uses is
+		// listed, even where it matches the table (a static_assert below enforces it).
 		//
-		// Standard holds 50-72, Close 40-62, Room 45-95. Every setup a preset uses
-		// is listed even where the number matches the table, so each block reads as
-		// a complete statement rather than a diff nobody can check without the
-		// table open beside it — and a static_assert below enforces it.
-		//
-		// THE CEILING THIS AUTHORING RESPECTS. Distance is solved for the fill AT
-		// THE CHOSEN LENS and then floored at the subject's minimum, so a tight
-		// fill on wide glass asks to stand closer than the floor allows, gets
-		// clamped, and renders LOOSER than authored. Roughly: 66 degrees at 0.85
-		// fill, 80 at 0.68, no constraint below 0.46. Over-the-shoulders are exempt
-		// — their standoff is forced past the other participant regardless.
+		// Distance is solved for the fill at the chosen lens and then floored at the
+		// subject's minimum, so a tight fill on wide glass gets clamped and renders
+		// looser than intended. Roughly: 66 degrees at 0.85 fill, 80 at 0.68, no limit
+		// below 0.46. Over-the-shoulders are exempt.
 
 		constexpr std::array kStandardLens{
 			Lens{ ShotType::kOverPlayerShoulder, 55 }, Lens{ ShotType::kOverNpcShoulder, 55 },
@@ -119,15 +83,10 @@ namespace SD::Camera
 			Lens{ ShotType::kTwoShot, 72 },            Lens{ ShotType::kProfile, 60 },
 		};
 
-		// Long glass throughout — 35 to 50 — which is what makes this look
-		// compressed and flattering rather than merely near. The extremes must not
-		// be raised past 66: they ask for 0.85 of frame height, and on wider glass
-		// they clamp at the distance floor and render looser than the setups they
-		// are supposed to be the tightest of.
-		//
-		// The distant shot is on the same glass as the extreme close and that is
-		// the point: a long lens across a room compresses it, so the one wide in
-		// this look belongs to it rather than reading as a different mod.
+		// Long lenses (35-50) throughout, which is what makes this look compressed
+		// rather than just near. Keep the extremes at 66 or below (see the note
+		// above). The distant shot shares the extreme close-up's lens, so it
+		// compresses the room in the same way.
 		constexpr std::array kCloseLens{
 			Lens{ ShotType::kOverPlayerShoulder, 40 },
 			Lens{ ShotType::kCloseUp, 50 },
@@ -137,9 +96,8 @@ namespace SD::Camera
 			Lens{ ShotType::kDistant, 40 },
 		};
 
-		// The distant shot is the odd one out at 45 and that is deliberate: a long
-		// lens across a room compresses it and reads as surveillance, which is the
-		// one image in this look that is not simply "wide".
+		// The distant shot is the odd one out at 45: a long lens across a room reads
+		// as watching from afar.
 		constexpr std::array kRoomLens{
 			Lens{ ShotType::kMaster, 95 },             Lens{ ShotType::kWide, 88 },
 			Lens{ ShotType::kDistant, 45 },            Lens{ ShotType::kTwoShot, 80 },
@@ -149,14 +107,12 @@ namespace SD::Camera
 			Lens{ ShotType::kThreeQuarterNpc, 72 },    Lens{ ShotType::kThreeQuarterPlayer, 72 },
 		};
 
-		// ---- How often ------------------------------------------------------
+		// ---- Weights -----------------------------------------------------------
 		//
-		// The table's weights are authored for the whole vocabulary — eight staples
-		// at 100, everything else at 50 — and that ratio means nothing once a
-		// preset has cut the list to ten. Weight also decides whether the room
-		// appears AT ALL: Coverage rolls the environmental pool's total against the
-		// active coverage pool's total, so the share of a conversation given to the
-		// space is the sum of what its setups are worth.
+		// The table's weights are for the whole vocabulary and mean little once a
+		// preset has cut the list down. Weight also decides how often the room appears
+		// at all, since Coverage rolls the environmental pool's total against the
+		// coverage pool's.
 
 		constexpr std::array kStandardWeight{
 			Weight{ ShotType::kOverPlayerShoulder, 100 }, Weight{ ShotType::kOverNpcShoulder, 100 },
@@ -166,17 +122,9 @@ namespace SD::Camera
 			Weight{ ShotType::kTwoShot, 25 },             Weight{ ShotType::kProfile, 15 },
 		};
 
-		// THE EXTREMES OUTWEIGH THE CLOSES, WHICH LOOKS BACKWARDS AND IS NOT.
-		//
-		// Both extremes are gated on an intensity the writer raised by hand, which
-		// the emotion scan puts at 5-8% of authored responses — so the weight is
-		// not competing across the whole conversation, only across the handful of
-		// lines that reach the gate at all. Weighted level with the closes they
-		// would lose most of those, and the one moment this look exists for would
-		// come up about as often as an accent.
-		//
-		// The room is at 10 against a coverage total of 250, so roughly one line in
-		// twenty-six goes wide. That is a place for the eye to land, not a habit.
+		// The extremes outweigh the closes because they only compete on the few lines
+		// with raised intensity (5-8% of authored responses). The room is at 10
+		// against a coverage total of 250, so about one line in twenty-six goes wide.
 		constexpr std::array kCloseWeight{
 			Weight{ ShotType::kOverPlayerShoulder, 34 },
 			Weight{ ShotType::kCloseUp, 36 },
@@ -186,10 +134,7 @@ namespace SD::Camera
 			Weight{ ShotType::kDistant, 10 },
 		};
 
-		// The room outweighs the faces, which is the whole claim of the look and
-		// the thing the old version of this preset got backwards — it shipped its
-		// master as an accent and its close-up as a staple, so the preset named for
-		// the room spent most of every speech on somebody's face.
+		// The room outweighs the faces, which is the point of this look.
 		constexpr std::array kRoomWeight{
 			Weight{ ShotType::kMaster, 85 },            Weight{ ShotType::kWide, 80 },
 			Weight{ ShotType::kLongNpc, 70 },           Weight{ ShotType::kLongPlayer, 70 },
@@ -199,36 +144,25 @@ namespace SD::Camera
 			Weight{ ShotType::kMediumNpc, 35 },         Weight{ ShotType::kMediumPlayer, 35 },
 		};
 
-		// ---- What moves -----------------------------------------------------
+		// ---- Moves -------------------------------------------------------------
 		//
-		// The half of a look the shot list cannot express. Each preset states a
-		// baseline and then names its exceptions; anything unlisted takes the
-		// baseline.
+		// Each preset gives a baseline and lists its exceptions; anything unlisted
+		// gets the baseline.
 
-		// Locked off, with two exceptions that mean something BECAUSE everything
-		// else is still. Both close-ups creep, so the pair still match.
+		// Locked off, except both close-ups, which creep (so the pair still match).
 		constexpr std::array kStandardMotion{
 			Motion{ ShotType::kCloseUp, Move::kPushIn, 14, 500 },
 			Motion{ ShotType::kClosePlayer, Move::kPushIn, 14, 500 },
 			Motion{ ShotType::kTwoShot, Move::kDrift, 10, 700 },
 		};
 
-		// FIVE OF THE SIX MOVE, AND NO TWO OF THEM THE SAME WAY.
+		// Five of the six setups move, each differently. The shoulder shot stays still
+		// because it's the one that places the two of you. The NPC single creeps in,
+		// the extreme zooms without moving, the reverse pulls its lens back, the
+		// player's extreme pushes in hard, and the one wide pulls out.
 		//
-		// The shoulder is the only setup here on sticks, and it is the one the eye
-		// uses to place the two of you — a shot that establishes should not also be
-		// drifting. Everything after it is a face, and each gets a different kind
-		// of pressure: the NPC single creeps physically closer, the extreme
-		// magnifies without moving, the reverse pulls its lens back off the player
-		// as they choose, their extreme drives in hard, and the one wide breathes
-		// outward so the room opens rather than closes.
-		//
-		// THE INERT PAIR ON THE LOCKED SETUP IS CANONICAL AND MUST NOT DRIFT.
-		// Amount 0 and time 400 are what a shot with no move stores. Nothing reads
-		// either — a locked setup moves nowhere over any duration — but preset
-		// comparison reads both, so leaving them unstated would mean the same look
-		// applied twice reported different drift depending on what the setup
-		// happened to be carrying beforehand.
+		// The locked setup stores amount 0 and time 400, like any shot with no move.
+		// Nothing uses them, but preset comparison reads them, so they're stated.
 		constexpr std::array kCloseMotion{
 			Motion{ ShotType::kOverPlayerShoulder, Move::kLocked, 0, 400 },
 			Motion{ ShotType::kCloseUp, Move::kPushIn, 40, 800 },
@@ -238,8 +172,8 @@ namespace SD::Camera
 			Motion{ ShotType::kDistant, Move::kPullOut, 55, 800 },
 		};
 
-		// The wides move and the singles do not, which is the inverse of Standard
-		// and is what makes the room feel like the subject.
+		// The wides move and the singles don't (the opposite of Standard), which makes
+		// the room feel like the subject.
 		constexpr std::array kRoomMotion{
 			Motion{ ShotType::kMaster, Move::kCraneUp, 40, 900 },
 			Motion{ ShotType::kWide, Move::kPullOut, 16, 800 },
@@ -258,14 +192,9 @@ namespace SD::Camera
 			return false;
 		}
 
-		// A SETUP WITH NO LENS NAMED FOR IT falls through to whatever the table
-		// ships, which is very often the wrong glass for the look. Adding a shot to
-		// a list and forgetting its lens would put it on screen at 72 degrees in
-		// the middle of a look that runs at 45, and nothing anywhere would say so.
-		//
-		// The same hole exists for weight and is worse: an unnamed setup inherits
-		// the table's staple-or-accent tier, authored against all thirty-nine and
-		// arbitrary inside a list of ten.
+		// Every setup in a preset's list must have a lens and a weight entry;
+		// otherwise it falls back to the table's values, which are usually wrong for
+		// the look.
 		template <typename T>
 		[[nodiscard]] constexpr bool EveryShotIsNamed(
 			std::span<const ShotType> a_shots, std::span<const T> a_entries)
@@ -285,10 +214,8 @@ namespace SD::Camera
 			return true;
 		}
 
-		// AN EXCEPTION NAMING A SETUP THE PRESET DOES NOT USE is dead weight that
-		// reads as intent. Both lookups only run for shots the preset switched on,
-		// so a stale entry does nothing at all while still describing a move to
-		// anybody reading it.
+		// An exception naming a setup the preset doesn't use would do nothing while
+		// looking like intent.
 		template <typename T>
 		[[nodiscard]] constexpr bool AllNamedAreUsed(
 			std::span<const ShotType> a_shots, std::span<const T> a_entries)
@@ -301,38 +228,16 @@ namespace SD::Camera
 			return true;
 		}
 
-		// THE ONE RULE FOR EVERY WORD BELOW: somebody who has never been on a film
-		// set has to be able to read it. Say what will be on screen, not what the
-		// technique is called.
+		// ---- Lighting ----------------------------------------------------------
 		//
-		// The long descriptions are gone. A look that needs four paragraphs to
-		// explain itself is not a look, and the three below are each short enough
-		// to say in a sentence — which is the test they were rebuilt to pass.
-		//
-		// ---- The light ------------------------------------------------------
-		//
-		// The fourth axis, and the one that finally makes two presets drawing the
-		// same setup at the same lens different images.
-		//
-		// ANYTHING ABSENT TAKES WHAT THE SETUP SHIPS UNDER, which is why these are
-		// short. A preset only speaks up where it disagrees with the shot table,
-		// and most of the time it does not: a close-up wants Soft under nearly
-		// every look, and restating that in three places would be three chances to
-		// drift.
-		//
-		// Standard names nothing at all, deliberately. It is the look the authored
-		// defaults describe, and a table asserting them again would be a copy that
-		// silently stops matching the day one of them changes.
+		// Anything not listed uses the setup's own default, so a preset only lists
+		// where it disagrees with the shot table. Standard lists nothing: it is the
+		// look the defaults describe.
 		constexpr std::array<Light, 0> kStandardLight{};
 
-		// Close is warm and it is soft, and it holds that through the whole
-		// conversation — a look this tight has nothing else in frame to carry a
-		// mood, so the light on the face has to be it. Firelight on the singles is
-		// the strongest statement any of these three makes, and it is what stops
-		// the preset reading as merely "the same shots, nearer".
-		//
-		// The extremes stay Hard. They are gated to intensity-100 lines and there
-		// is no gentle version of one.
+		// Close is warm and soft throughout; in a look this tight the light on the
+		// face carries the mood. The extremes stay Hard, since they only appear on
+		// high-intensity lines.
 		constexpr std::array kCloseLight{
 			Light{ ShotType::kOverPlayerShoulder, "soft" },
 			Light{ ShotType::kCloseUp, "soft" },
@@ -340,18 +245,13 @@ namespace SD::Camera
 			Light{ ShotType::kExtremeClose, "hard" },
 			Light{ ShotType::kExtremeClosePlayer, "hard" },
 
-			// Nothing on the one wide. A key aimed at a head from across a room
-			// lights a speck and spills over everything between it and the lens,
-			// which is the one way a lighting feature announces itself as a mod.
+			// Nothing on the one wide: a key from across a room just lights a patch of
+			// floor.
 			Light{ ShotType::kDistant, "off" },
 		};
 
-		// Room lights almost nothing, and that is the entire point rather than an
-		// omission. This look is about the space, the space is already lit by the
-		// people who built it, and a key light on a figure thirty feet away is a
-		// bright patch on a floor that announces a mod is running. The two setups
-		// that do get anything are the ones where a face is still large enough to
-		// be worth modelling.
+		// Room lights almost nothing; the space is already lit. Only the two setups
+		// where a face is still big enough get anything.
 		constexpr std::array kRoomLight{
 			Light{ ShotType::kMaster, "off" },
 			Light{ ShotType::kWide, "off" },
@@ -367,13 +267,9 @@ namespace SD::Camera
 			Light{ ShotType::kThreeQuarterPlayer, "natural" },
 		};
 
-		// THE CLOSE STYLE IS THE MOD'S DEFAULTS, WRITTEN ONCE.
-		//
-		// Named rather than spelled inline because three other places have to agree
-		// with it exactly: Camera::Tunables' field initialisers, the fallbacks in
-		// Director::ReadTuning, and config/SD.ini. A fresh install reads all three
-		// and has to land on numbers this struct would report zero drift against,
-		// or the Presets page opens with nothing ticked.
+		// The Close style is the mod's defaults. Camera::Tunables' initializers,
+		// Director::ReadTuning's fallbacks and config/SD.ini must all match it, or the
+		// Presets page opens with nothing selected on a fresh install.
 		//
 		//                            min   max  cutMin cutMax  perLine short  spk    choose
 		constexpr Style kCloseStyle{ 240, 900, 3, 6, true, true, false, false };
@@ -404,17 +300,15 @@ namespace SD::Camera
 				Move::kLocked, 0, 600, kRoomMotion, kRoomLens, kRoomWeight, kRoomLight },
 		};
 
-		// The index of "close" in kAll, checked rather than trusted. Reordering the
-		// table without moving this is a build error rather than a mod that ships
-		// pointing its defaults at the wrong look.
+		// Index of "close" in kAll, checked below so reordering the table can't
+		// silently change the default.
 		constexpr std::size_t kDefaultPresetIndex = 1;
 		static_assert(kDefaultPresetIndex < kAll.size() &&
 				std::string_view{ kAll[kDefaultPresetIndex].key } == "close",
 			"DefaultPreset must be Close: the shipped ini, the C++ fallbacks and the "
 			"menu reset are all written to agree with it.");
 
-		// And the style it carries has to be the one written above rather than a
-		// copy that drifted.
+		// And its style must be the one above.
 		static_assert(kAll[kDefaultPresetIndex].style.cutEveryMin == kCloseStyle.cutEveryMin &&
 				kAll[kDefaultPresetIndex].style.cutEveryMax == kCloseStyle.cutEveryMax &&
 				kAll[kDefaultPresetIndex].style.perLineAngleChange &&
@@ -456,10 +350,9 @@ namespace SD::Camera
 			"A preset names a move for a setup it does not use. Nothing will read "
 			"it.");
 
-		// Every shot key a preset could switch on or off. A preset writes the whole
-		// table, not just its own list, or applying a narrow one after a broad one
-		// would leave the broad one's extras enabled and the two would blur into
-		// each other — which is its own version of "they all feel the same".
+		// A preset writes the whole shot table, not just its own list; otherwise
+		// applying a narrow preset after a broad one would leave the broad one's
+		// extras enabled.
 		[[nodiscard]] bool InList(std::span<const ShotType> a_shots, ShotType a_type)
 		{
 			for (const auto shot : a_shots) {
@@ -470,12 +363,8 @@ namespace SD::Camera
 			return false;
 		}
 
-		// What this preset wants this shot doing: its own named exception if it has
-		// one, otherwise the look's baseline.
-		//
-		// One function so apply and drift cannot disagree. They did once, on the
-		// shot list, and a preset that applied one set and was then measured against
-		// another can never report itself as active.
+		// What this preset wants this shot doing: its own exception if it has one,
+		// otherwise the baseline. Shared by apply and drift so they can't disagree.
 		[[nodiscard]] Motion MotionFor(const Preset& a_preset, ShotType a_type)
 		{
 			return PresetMotion(a_preset, a_type);
@@ -492,11 +381,8 @@ namespace SD::Camera
 		return Motion{ a_type, a_preset.baseMove, a_preset.baseAmount, a_preset.baseTime };
 	}
 
-	// Falls back to the TABLE rather than to some per-preset baseline, and there
-	// is no useful baseline to fall back to instead: a single number applied to
-	// every setup is exactly the global lens bias that was removed, and it
-	// flattens the difference between a close-up and a master rather than
-	// expressing anything about a look.
+	// Falls back to the table, not a per-preset baseline lens; a single lens for
+	// every setup would flatten the difference between a close-up and a master.
 	int PresetLens(const Preset& a_preset, ShotType a_type)
 	{
 		for (const auto& l : a_preset.lenses) {
@@ -551,20 +437,9 @@ namespace SD::Camera
 		return nullptr;
 	}
 
-	// MEASURED AGAINST LIVE STATE, NEVER AGAINST THE INI, AND THAT IS BOTH A
-	// PERFORMANCE FIX AND A CORRECTNESS ONE.
-	//
-	// This used to ask Config for every value, which is a profile read apiece and
-	// a hooked file operation apiece under Mod Organizer's virtual filesystem.
-	// That was tolerable at eight dials plus a flag per shot. It stopped being
-	// tolerable the moment the move started counting: three more reads for every
-	// enabled shot, times forty-odd shots, times five presets, is comfortably
-	// eight hundred file operations every refresh — and the Presets page went
-	// visibly sluggish the build that landed.
-	//
-	// Live state answers all of it from arrays. It is also the more honest
-	// question: the page is telling somebody how far their CAMERA is from a look,
-	// and the camera runs on what is loaded, not on what is on disk.
+	// Compared against live state, not the ini. Reading the ini meant a profile
+	// read per value (each a hooked file operation under MO2), which made the
+	// Presets page sluggish. Live state is also what the camera actually runs on.
 	int PresetDrift(const Preset& a_preset)
 	{
 		const auto& s = a_preset.style;
@@ -591,34 +466,27 @@ namespace SD::Camera
 			const bool want = InList(a_preset.shots, type);
 			differs(Shot::Enabled(type), want);
 
-			// A shot this preset does not use has no opinion about how it moves.
-			// Counting the move on a switched-off setup would report drift for a
-			// setting that cannot affect anything, which is how a preset ends up
-			// looking modified for reasons nobody can find on screen.
+			// A shot the preset doesn't use has no opinion about how it moves; counting it
+			// would report drift nobody can see.
 			if (!want) {
 				continue;
 			}
 
-			// The move counts, and it has to. Without it a preset read as
-			// unmodified after every move in it had been retuned, because the only
-			// thing the check knew about was which shots were switched on.
+			// The move counts, or a preset would read as unchanged after its moves were
+			// retuned.
 			const auto wanted = MotionFor(a_preset, type);
 			differs(Shot::MoveOf(type), wanted.move);
 			differs(Shot::MoveAmount(type), wanted.amount);
 			differs(Shot::MoveTime(type), wanted.time);
 
-			// And the glass, for exactly the same reason. It is the axis these
-			// looks now differ on most, so a check blind to it would call two
-			// presets identical at the point they are furthest apart.
+			// Same for the lens, which is where these looks differ most.
 			differs(Shot::Lens(type), PresetLens(a_preset, type));
 
-			// And how often. A look whose room shots have been dialled to zero
-			// is not that look any more, however intact its shot list is.
+			// And the weight: a look with its room shots at zero isn't that look.
 			differs(Shot::Weight(type), PresetWeight(a_preset, type));
 
-			// And how it is lit. Compared as indices rather than as names because
-			// that is what is live — a name comparison would report drift for a
-			// difference in spelling that resolves to the same rig.
+			// And the lighting, compared as indices (what's live) so spelling differences
+			// don't count.
 			differs(Shot::LightOf(type), Scene::FindLook(PresetLight(a_preset, type)));
 		}
 
@@ -645,11 +513,7 @@ namespace SD::Camera
 		Config::SetInt("Direction", "iCutEveryMax", s.cutEveryMax);
 		Config::SetBool("Direction", "bPerLineAngleChange", s.perLineAngleChange);
 
-		// bCoverPlayerTurn is deliberately NOT written here. Every preset needs the
-		// player's own turn covered — that is not a stylistic axis, it is the
-		// difference between a dialogue camera and a landscape camera — so it stays
-		// a single global setting rather than something five presets each assert.
-		// Applying a preset must never quietly turn it off.
+		// bCoverPlayerTurn isn't a style and isn't written by presets.
 		Config::SetBool("Direction", "bHoldOnShortLines", s.holdOnShortLines);
 		Config::SetBool("Direction", "bTimedCutsWhileSpeaking", s.timedCutsWhileSpeaking);
 		Config::SetBool("Direction", "bTimedCutsWhileChoosing", s.timedCutsWhileChoosing);
@@ -668,12 +532,8 @@ namespace SD::Camera
 			}
 			++on;
 
-			// The half of a look the shot list could never say.
-			//
-			// Written only for setups the preset actually uses: stamping a move onto
-			// a switched-off shot would quietly overwrite whatever the player had
-			// tuned there, and they would find it changed the next time they enabled
-			// it with nothing on screen to explain why.
+			// Moves are written only for setups the preset uses, so applying it doesn't
+			// overwrite tuning on switched-off shots.
 			const auto m = MotionFor(a_preset, type);
 			Config::SetInt("Shots", MoveKey(type), static_cast<int>(m.move));
 			Config::SetInt("Shots", MoveAmountKey(type), m.amount);
@@ -685,45 +545,35 @@ namespace SD::Camera
 				++moving;
 			}
 
-			// The glass. Written for every setup the preset uses, including the
-			// ones it does not name — those get the table's own lens put back,
-			// so applying a look twice with a different one in between gives the
-			// same result both times. A preset that only wrote the lenses it
-			// mentioned would inherit the previous look's numbers on everything
-			// else and could never be reproduced.
+			// Lenses are written for every setup the preset uses, including unnamed ones
+			// (which get the table's lens back), so applying a look always gives the same
+			// result.
 			const int lens = PresetLens(a_preset, type);
 			Config::SetInt("Shots", LensKey(type), lens);
 			Shot::SetLens(type, lens);
 			narrowest = std::min(narrowest, lens);
 			widest = std::max(widest, lens);
 
-			// And how often it comes up, which is what decides how much of the
-			// look each of its angles actually is — including, for the room
-			// setups, whether the camera ever leaves the two faces at all.
+			// And the weight, which also decides whether the camera ever leaves the two
+			// faces for the room setups.
 			const int weight = PresetWeight(a_preset, type);
 			Config::SetInt("Shots", WeightKey(type), weight);
 			Shot::SetWeight(type, weight);
 
-			// And how it is lit. Written as a name and resolved to an index in the
-			// same breath, so a preset takes hold on the conversation it was
-			// pressed in rather than on the one after — LoadSettings below would
-			// get there eventually, but a player pressing four looks in a row is
-			// judging each by the last one's lighting until it does.
+			// And the lighting, written as a name and resolved right away so it applies to
+			// the current conversation.
 			const char* rig = PresetLight(a_preset, type);
 			Config::SetString("Shots", LightKey(type), rig);
 			const int rigIndex = Scene::FindLook(rig);
 			Shot::SetLight(type, rigIndex >= 0 ? rigIndex : Scene::DefaultLook());
 		}
 
-		// Push the dials live as well as writing them. Without this the preset
-		// would only take hold on the next conversation, and somebody trying four
-		// of them in a row would be judging each one by the last one's timing.
+		// Apply live as well as writing, so the preset takes effect in the current
+		// conversation.
 		Director::LoadSettings();
 
-		// The lens range goes in the line because it is the half of a look that
-		// cannot be inferred from anything else here. Two presets with the same
-		// shot count and the same cutting are still nothing alike at 40 degrees
-		// and at 100, and this is the only place the log would ever say so.
+		// The lens range is in the log line because it's the part of a look that can't
+		// be inferred from anything else.
 		Log::Info(Log::Category::kCamera,
 			"Preset '{}' applied: {} setup(s) on, {} of them moving, {}-{} degrees, "
 			"shot {:.2f}-{:.2f}s."sv,
@@ -732,42 +582,24 @@ namespace SD::Camera
 			static_cast<double>(s.maxShotTime) / 100.0);
 	}
 
-	// ---- Your own presets -------------------------------------------------
+	// ---- Saved presets -----------------------------------------------------
 	//
-	// Stored as one string per slot rather than as two hundred keys.
+	// Each slot is one string rather than hundreds of keys, so SD.ini stays
+	// readable. The name has its own key; the payload is one line that isn't meant
+	// for hand-editing.
 	//
-	// A snapshot is eight dials plus four numbers for each of forty-odd shots, and
-	// spelling that out would put six hundred lines of machine data into a file
-	// whose whole value is that a person can open it and read it. Nobody hand-edits
-	// a saved snapshot; they save it again. So the readable half — the name — is
-	// its own key, and the payload is one line that says up front it is not for
-	// editing.
-	//
-	// Versioned because it will change. A shot added to the middle of the enum
-	// would silently shift every entry after it, so the reader checks the version
-	// and refuses rather than applying a scrambled set. Refusing to load somebody's
-	// saved look is a disappointment; loading it wrong is a bug report.
+	// Versioned: a shot added to the middle of the enum would shift every entry,
+	// so the reader checks the version and refuses rather than applying a
+	// scrambled set.
 	namespace
 	{
-		// A SLOT MUST HOLD EVERYTHING A PRESET CAN WRITE, or it cannot reproduce
-		// the look it was taken from: it comes back wearing whatever the last
-		// preset applied left behind on the fields it forgot.
-		//
-		// 2 added the per-setup lens. 3 added how-often, when presets learned to
-		// set that too — and that one matters more than it looks, because the
-		// room's share of a conversation is the sum of its setups' weights. A
-		// slot saved off Show the Room and restored without them would come back
-		// as a shot list full of wides that the camera almost never cuts to.
-		//
-		// OLDER PAYLOADS STILL LOAD. Each version simply carries fewer numbers
-		// per setup, and the ones it does not carry are LEFT AS THEY ARE rather
-		// than guessed at — a slot saved before a field existed has no opinion
-		// about it, and stamping the table's defaults over the player's tuning
-		// would be inventing one.
+		// A slot has to hold everything a preset can write, or it can't reproduce the
+		// look. Version 2 added the per-setup lens, version 3 the weight. Older
+		// payloads still load; fields they don't carry are left as they are.
 		constexpr int         kSlotVersion = 3;
 		constexpr std::size_t kSlotStride = 6;  // enabled, move, amount, time, lens, weight
 
-		// What each version wrote per setup. Index is the version.
+		// Values per setup for each version. Index is the version.
 		constexpr std::array<std::size_t, 4> kStrideForVersion{ 0, 4, 5, kSlotStride };
 
 		[[nodiscard]] const char* SlotNameKey(int a_index)
@@ -790,20 +622,10 @@ namespace SD::Camera
 			return key.c_str();
 		}
 
-		// LIGHTING IS SAVED BESIDE THE PAYLOAD RATHER THAN INSIDE IT.
-		//
-		// The slot payload is a comma-separated list of INTEGERS with a stride per
-		// version, and adding the rig to it would mean storing an ordinal — which
-		// is the one thing the rig table is specifically designed not to need. A
-		// shot names its rig so the table can be reordered and extended freely; a
-		// slot that stored index 4 would quietly relight itself the first time a
-		// rig was inserted above it, and it would do so silently and for good.
-		//
-		// So the names go in their own key, comma-separated, one per setup in shot
-		// order. An absent key is an older slot and means "this slot has nothing to
-		// say about lighting" — which is left alone rather than stamped with
-		// defaults, exactly as the stride guard treats a payload that predates the
-		// lens and the weight.
+		// Lighting is saved in its own key, by name, one per setup in shot order. The
+		// payload is integers, and storing a rig index would break when rigs are
+		// added. A missing key means an older slot with no lighting, which is left
+		// alone.
 		[[nodiscard]] const char* SlotLightKey(int a_index)
 		{
 			static std::array<std::string, kCustomSlots> cache;
@@ -836,12 +658,9 @@ namespace SD::Camera
 			return a_index >= 0 && a_index < kCustomSlots;
 		}
 
-		// Everything a slot holds, from LIVE state, as one string.
-		//
-		// One function for both jobs: writing a slot, and asking whether a slot is
-		// the thing currently running. If those two ever built the string
-		// differently, a slot could never report itself as in use — the same trap
-		// apply and drift fell into on the shot list.
+		// Everything a slot holds, from live state, as one string. Used both for
+		// saving and for checking whether a slot is the one running, so the two can't
+		// disagree.
 		[[nodiscard]] std::string Snapshot()
 		{
 			const auto  live = Director::GetTunables();
@@ -856,19 +675,15 @@ namespace SD::Camera
 			add(live.maxShotTime);
 			add(live.cutEveryMin);
 			add(live.cutEveryMax);
-			// Slot ordinal 5 held bCutOnLineEnd up to 1.3 and holds
-			// bPerLineAngleChange from 1.4. The slot version is unchanged on
-			// purpose: the field is still one boolean at the same offset, and every
-			// value stored in it is still a legal value for the new one — a slot
-			// saved with line-end cuts on comes back with per-line angle changes on,
-			// which is the closer of the two readings of "this look cut on lines".
+			// Slot field 5 held bCutOnLineEnd up to 1.3 and holds bPerLineAngleChange from
+			// 1.4. Same offset and type, so the version didn't change.
 			add(live.perLineAngleChange ? 1 : 0);
 			add(live.holdOnShortLines ? 1 : 0);
 			add(live.timedCutsWhileSpeaking ? 1 : 0);
 			add(live.timedCutsWhileChoosing ? 1 : 0);
 
-			// The shot count goes in so the reader can tell a truncated line from
-			// one written by a build with a different table.
+			// The shot count is stored so a truncated line can be told apart from one
+			// written by a build with a different table.
 			add(static_cast<int>(ShotType::kCount));
 
 			for (std::size_t i = 0; i < static_cast<std::size_t>(ShotType::kCount); ++i) {
@@ -964,7 +779,7 @@ namespace SD::Camera
 
 		const auto values = SplitInts(raw, ',');
 
-		// 1 version + 8 dials + 1 count, then a fixed run per shot.
+		// 1 version + 8 settings + 1 count, then a fixed run per shot.
 		constexpr std::size_t kHeader = 10;
 		const int  version = values.empty() ? 0 : values[0];
 		const bool known = version > 0 &&
@@ -978,16 +793,8 @@ namespace SD::Camera
 
 		const std::size_t stride = kStrideForVersion[static_cast<std::size_t>(version)];
 
-		// TWO SEPARATE FAILURES, SAID SEPARATELY.
-		//
-		// These were one condition with one message, and it read as nonsense the
-		// first time it fired: "Slot 1 holds 39 shot(s) against this build's 39".
-		// Both numbers agreed, because the half that had actually failed was the
-		// length check underneath — the value came back truncated by the config
-		// reader — and the message could only describe the other half.
-		//
-		// A diagnostic that names the wrong cause is worse than no diagnostic. It
-		// sent the first look for this bug at the shot table, which was fine.
+		// Two separate failures with separate messages: a wrong shot count, or a value
+		// that came back truncated by the config reader.
 		const auto count = static_cast<std::size_t>(values[9]);
 		if (count != static_cast<std::size_t>(ShotType::kCount)) {
 			Log::Warn(Log::Category::kCamera,
@@ -1014,9 +821,7 @@ namespace SD::Camera
 		Config::SetBool("Direction", "bTimedCutsWhileSpeaking", values[7] != 0);
 		Config::SetBool("Direction", "bTimedCutsWhileChoosing", values[8] != 0);
 
-		// bCoverPlayerTurn is left alone here for exactly the reason ApplyPreset
-		// leaves it alone: it is not a style, it is the difference between a
-		// dialogue camera and a landscape camera.
+		// bCoverPlayerTurn isn't touched, as in ApplyPreset.
 
 		int on = 0;
 		for (std::size_t i = 0; i < count; ++i) {
@@ -1038,8 +843,8 @@ namespace SD::Camera
 			Shot::SetMoveAmount(type, amount);
 			Shot::SetMoveTime(type, time);
 
-			// Each field only if the payload actually carried it. Anything a
-			// older slot never saved is left exactly as it is.
+			// Only the fields the payload actually carries; older slots leave the rest as
+			// they are.
 			if (stride > 4) {
 				const int lens = std::clamp(values[base + 4], kMinLens, kMaxLens);
 				Config::SetInt("Shots", LensKey(type), lens);
@@ -1055,12 +860,8 @@ namespace SD::Camera
 			on += enabled ? 1 : 0;
 		}
 
-		// The rigs, if this slot carried any.
-		//
-		// Applied only when the list is the length this build expects. A slot saved
-		// against a different shot count would otherwise assign rigs to setups by
-		// position, which is the one way to get lighting that is wrong on every
-		// angle at once and consistent enough to look deliberate.
+		// The rigs, if the slot has them. Only applied when the list length matches
+		// this build, so rigs never land on the wrong setups by position.
 		const auto rawLights = Config::String("CustomPresets", SlotLightKey(a_index), "");
 		if (!rawLights.empty()) {
 			const auto names = SplitNames(rawLights, ',');
@@ -1081,19 +882,12 @@ namespace SD::Camera
 			}
 		}
 
-		// Live as well as written, the same as a built-in preset. Trying three
-		// saved looks in a row and judging each by the last one's timing is the
-		// bug this avoids.
+		// Applied live, like a built-in preset.
 		Director::LoadSettings();
 
-		// A LEGACY SLOT REWRITES ITSELF ONCE, THE MOMENT IT IS USED.
-		//
-		// ActiveCustomSlot answers by comparing the stored line against a fresh
-		// snapshot, and a snapshot carries every field the current version knows
-		// about — so an older payload can never equal one, and the slot could be
-		// running and still never say "in use". Re-saving settles it: what goes
-		// back is exactly what was just applied, plus whatever was already live
-		// on the fields that payload never had an opinion about.
+		// A legacy slot re-saves itself once it's used. ActiveCustomSlot compares the
+		// stored line against a fresh snapshot, which an older payload can never
+		// match, so without this the slot would never show as in use.
 		if (stride < kSlotStride) {
 			SaveCustomSlot(a_index, Config::String("CustomPresets", SlotNameKey(a_index), ""));
 			Log::Info(Log::Category::kCamera,
@@ -1133,9 +927,8 @@ namespace SD::Camera
 		if (!ValidSlot(a_index)) {
 			return;
 		}
-		// All three, or a name with no payload reads as a slot that is in use and
-		// applies nothing when pressed — and a lighting list left behind would be
-		// picked up whole by whatever look is saved into the slot next.
+		// Clear all three keys; otherwise an empty name or a leftover lighting list
+		// would carry into whatever is saved into the slot next.
 		Config::SetString("CustomPresets", SlotDataKey(a_index), "");
 		Config::SetString("CustomPresets", SlotNameKey(a_index), "");
 		Config::SetString("CustomPresets", SlotLightKey(a_index), "");
@@ -1149,19 +942,21 @@ namespace SD::Camera
 			return;
 		}
 
-		const auto* preset = FindPreset(wanted);
-		if (!preset) {
-			Log::Warn(Log::Category::kCamera,
-				"[Presets] sApply names '{}', which is not a preset. Ignored."sv, wanted);
-			Config::SetString("Presets", "sApply", "");
-			return;
+		// Built-ins first, then installed presets by name or file name.
+		if (const auto* preset = FindPreset(wanted)) {
+			ApplyPreset(*preset);
+		} else {
+			RescanPresetFiles(true);
+			if (const auto* file = FindInstalledPreset(wanted)) {
+				ApplyInstalledPreset(*file);
+			} else {
+				Log::Warn(Log::Category::kCamera,
+					"[Presets] sApply names '{}', which is not a built-in or installed preset. Ignored."sv, wanted);
+			}
 		}
 
-		ApplyPreset(*preset);
-
-		// Cleared so this is a one-shot rather than a mode. Left set, it would
-		// overwrite whatever the player tuned afterwards on every single launch,
-		// and the edits would appear to simply not save.
+		// Cleared so it applies once; otherwise it would overwrite the player's tuning
+		// on every launch.
 		Config::SetString("Presets", "sApply", "");
 	}
 }

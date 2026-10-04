@@ -1,44 +1,20 @@
 #pragma once
 
-// Reading Skyrim's own words, one character at a time.
-//
-// Everything textual that reaches this mod comes from the GAME — topic rows off
-// Scaleform, subtitles off the response record — and all of it is UTF-8. Until
-// now every consumer walked it as bytes, which is correct for exactly one
-// question ("are these bytes the ASCII substring I am looking for") and wrong
-// for every other one.
-//
-// The two that were wrong, both found on 2026-08-28:
-//
-//   - Director::WordCount counted runs between spaces. Japanese and Chinese do
-//     not put spaces between words, so an entire sentence counted as one, and
-//     bHoldOnShortLines then classified every line in the game as too short to
-//     cut on.
-//   - Performance::EmotionFromText looked for '?' and '!'. A Japanese or
-//     Chinese localisation writes those as ？ and ！ — three bytes each, neither
-//     containing an ASCII '?' — so the question rule, which that function's own
-//     comment calls the one that earns most of its keep, never fired once.
-//
-// Neither is fixable by looking harder at bytes. They need characters, so this
-// is the one place that turns the former into the latter.
+// UTF-8 text helpers. Topic rows from Scaleform and subtitles from response
+// records are UTF-8, and anything that needs characters rather than bytes goes
+// through here: counting words in scripts without spaces, or finding
+// full-width ？ and ！ in Japanese and Chinese text.
 
 namespace SD::Text
 {
-	// U+FFFD, returned for a byte sequence that is not valid UTF-8.
-	//
-	// A replacement character rather than a failure, because every caller here is
-	// classifying rather than parsing: a corrupt byte is a character that is not a
-	// question mark and not a kanji, which is all any of them need to know. It
-	// also cannot match any of the ranges they test, so a malformed line degrades
-	// to "no punctuation, no words" rather than to a hang or a wrong answer.
+	// U+FFFD, returned for bytes that aren't valid UTF-8. Every caller is
+	// classifying, so a corrupt byte just becomes a character that matches
+	// nothing.
 	inline constexpr char32_t kReplacement = 0xFFFD;
 
-	// Decode one character, advancing a_pos past it.
-	//
-	// ALWAYS ADVANCES, and that is load-bearing rather than tidy: every caller is
-	// a loop over the whole string, and a decoder that can return without moving
-	// turns a malformed byte into an infinite one. A bad lead byte consumes
-	// exactly itself and reports kReplacement.
+	// Decode one character and advance a_pos past it. Always advances (callers
+	// loop over the whole string); a bad lead byte consumes itself and returns
+	// kReplacement.
 	[[nodiscard]] inline char32_t NextCodepoint(std::string_view a_text, std::size_t& a_pos)
 	{
 		if (a_pos >= a_text.size()) {
@@ -56,9 +32,8 @@ namespace SD::Text
 			return lead;
 		}
 
-		// How many bytes the lead claims, and the bits it contributes. 0 marks a
-		// continuation byte or one of the two lengths UTF-8 retired, either of
-		// which is a stray rather than a start.
+		// How many bytes the lead byte claims and the bits it contributes. 0 marks a
+		// continuation byte or a retired length, which is a stray, not a start.
 		std::size_t  length = 0;
 		std::uint32_t value = 0;
 		if ((lead & 0xE0) == 0xC0) {
@@ -91,9 +66,7 @@ namespace SD::Text
 
 		a_pos += length;
 
-		// Overlong forms and surrogates are rejected on the same grounds as a bad
-		// lead byte: they are not the character they encode, and treating them as
-		// one would let "。" be smuggled in as something that is not it.
+		// Overlong forms and surrogates are rejected like a bad lead byte.
 		const bool overlong = (length == 2 && value < 0x80) ||
 			(length == 3 && value < 0x800) ||
 			(length == 4 && value < 0x10000);
@@ -105,12 +78,8 @@ namespace SD::Text
 		return static_cast<char32_t>(value);
 	}
 
-	// ASCII-only lowering, deliberately.
-	//
-	// std::tolower is locale-dependent for anything above 0x7F, and the game is
-	// entitled to have called setlocale before this mod ever runs. Every keyword
-	// this is used against is ASCII, so folding non-ASCII bytes could only ever
-	// change an answer by accident.
+	// ASCII-only lowercasing. std::tolower depends on the locale above 0x7F, and
+	// every keyword this is used with is ASCII.
 	[[nodiscard]] inline constexpr char AsciiLower(char a_char) noexcept
 	{
 		return (a_char >= 'A' && a_char <= 'Z') ?

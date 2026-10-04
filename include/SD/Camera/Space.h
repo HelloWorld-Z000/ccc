@@ -38,8 +38,8 @@ namespace SD::Camera
 		float boundRadius{ 0.0f };
 	};
 
-	// A short-lived main-thread snapshot. Build once for a candidate search or
-	// monitor update; do not retain it across frames or cell changes.
+	// A short-lived main-thread snapshot. Build once per candidate search or
+	// monitor update; don't keep it across frames or cell changes.
 	struct SightContext
 	{
 		RE::bhkWorld* world{ nullptr };
@@ -51,15 +51,15 @@ namespace SD::Camera
 	[[nodiscard]] SightTarget MeasureSightTarget(RE::Actor* a_actor,
 		const RE::NiPoint3& a_fallbackHead, float a_scale);
 
-	// Five face rays converge at the actual lens. Four clear samples including
-	// the center admit a shot; two upper-chest samples affect preference only.
-	// lens is horizontal FOV in degrees; crop is the fraction removed PER edge.
+	// Five face rays converge at the actual lens. Four clear samples including the
+	// center admit a shot; two upper-chest samples only affect preference. lens is
+	// horizontal FOV in degrees; crop is the fraction removed per edge.
 	[[nodiscard]] SubjectSight SubjectVisibility(const RE::NiPoint3& a_camera,
 		const RE::NiPoint3& a_lookAt, float a_lens, float a_aspect, float a_crop,
 		const SightTarget& a_target, const SightContext& a_context);
 
-	// Independent small local lens volume, including actor bodies. Unlike the
-	// legacy placement bundle, foreground away from the lens is not tested.
+	// A small local volume around the lens, including actor bodies. Unlike the
+	// legacy placement bundle, foreground away from the lens isn't tested.
 	[[nodiscard]] SightState LensClearance(const RE::NiPoint3& a_camera,
 		const SightContext& a_context);
 
@@ -73,40 +73,24 @@ namespace SD::Camera
 	// Casts a sightline ray between two world points.
 	[[nodiscard]] Probe Cast(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
 
-	// Is the view between these two points unobstructed?
+	// Is the view between these two points clear? With No Camera Collision (common
+	// in load orders) nothing else stops a shot being placed inside a wall, so
+	// occlusion is checked here.
 	//
-	// Load orders commonly run No Camera Collision, which stops the engine pushing
-	// the camera out of geometry. That is convenient for an absolute-pose camera —
-	// nothing fights the pose — but it means nothing catches a shot placed inside a
-	// wall either. Occlusion has to be checked here or not at all.
-	//
-	// CAST FROM THE SUBJECT TOWARD THE CAMERA, never the other way. A ray that
-	// begins inside a wall reports no hit, so a camera buried in masonry passes an
-	// inward test cleanly and the check silently inverts.
+	// Cast from the subject toward the camera, never the other way: a ray that
+	// starts inside a wall reports no hit.
 	[[nodiscard]] bool Clear(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
 
 	// How much open space extends from a point along a direction, up to a_max.
-	// Used to find which side of a conversation the room is actually on.
 	[[nodiscard]] float Clearance(const RE::NiPoint3& a_origin, const RE::NiPoint3& a_direction, float a_max);
 
-	// THREE RAYS ACROSS THE WIDTH OF THE SHOT, NOT ONE DOWN THE MIDDLE.
-	//
-	// A camera does not see a line, it sees a cone, and a single ray is a knife
-	// edge: a railing, a chair back or a passing NPC's drawn weapon flips it fully
-	// on and off rather than degrading. That flicker is what the standoff rate
-	// limiter in Shot.cpp was built to smooth over, which treats the symptom.
-	//
-	// The bundle is a truncated cone. It is wide at the SUBJECT end — roughly their
-	// own silhouette, so anything intruding there is intruding into frame — and
-	// narrow at the CAMERA end, where the width is the camera's own body. One
-	// volume therefore answers both questions that matter: is the shot's foreground
-	// clear, and is there room to stand.
-	//
-	// Horizontal only, and deliberately. Pillars, railings, doorframes, market
-	// stalls and people are all horizontal intrusions; the vertical is already
-	// covered by the ray's own rise interpolation at one end and the ceiling clamp
-	// at the other. Five rays cost two-thirds more for the axis that almost never
-	// decides anything.
+	// Three rays across the width of the shot rather than one down the middle; a
+	// single ray flips fully on and off for a railing or a passing weapon. The
+	// bundle is a truncated cone: wide at the subject (roughly their silhouette)
+	// and narrow at the camera (the camera's own size), so it answers both "is the
+	// foreground clear" and "is there room to stand". Horizontal only: most
+	// intrusions (pillars, railings, door frames, people) are horizontal, and the
+	// ceiling clamp covers the vertical.
 	struct Bundle
 	{
 		bool  valid{ false };
@@ -117,21 +101,12 @@ namespace SD::Camera
 	[[nodiscard]] Bundle CastBundle(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to,
 		float a_spreadNear, float a_spreadFar);
 
-	// How much of this sightline other people are standing in. 0 is nobody.
-	//
-	// The Havok probes above run on the line-of-sight layer, which excludes actors
-	// by design — a ray that starts at somebody's head would otherwise hit that
-	// head immediately and report a wall in every direction. The side effect is
-	// that a third NPC between the camera and the speaker does not exist, and
-	// taverns, markets and jarls' courts are exactly where conversations happen.
-	//
-	// Answered geometrically rather than with a raycast: a horizontal distance from
-	// the segment, against the actor's own bound. No physics call, so this is cheap
-	// enough to ask once per candidate.
-	//
-	// Returns a penalty rather than a veto. A body three hundred units out
-	// clipping the edge of frame is a dirty foreground, which is sometimes the
-	// better shot; it should lose points, not be forbidden.
+	// How much of this sightline other people are standing in; 0 is nobody. The
+	// Havok probes ignore actors (a ray from someone's head would hit that head),
+	// so bystanders are checked geometrically: horizontal distance from the
+	// segment against each actor's bound. Cheap enough per candidate. Returns a
+	// penalty rather than a veto, since a body clipping the edge of frame is
+	// sometimes the better shot.
 	[[nodiscard]] float Crowding(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to,
 		RE::FormID a_ignoreA, RE::FormID a_ignoreB, float a_radius);
 }

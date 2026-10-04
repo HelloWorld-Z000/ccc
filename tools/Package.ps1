@@ -38,7 +38,7 @@ foreach ($dir in @('src','include','cmake','tests')) { Copy-Item -LiteralPath "$
 New-Item -ItemType Directory -Path "$source/config", "$source/tools" | Out-Null
 Copy-Item -LiteralPath "$root/config/SD.ini" -Destination "$source/config"
 Copy-Item -LiteralPath $PSCommandPath -Destination "$source/tools"
-foreach ($file in @('CMakeLists.txt','CMakePresets.json','vcpkg.json','vcpkg-configuration.json','.gitmodules','NEXUS_DESCRIPTION.bbcode','EXPRESSION-PROFILES.md')) {
+foreach ($file in @('CMakeLists.txt','CMakePresets.json','vcpkg.json','vcpkg-configuration.json','.gitmodules','NEXUS_DESCRIPTION.bbcode')) {
     Copy-Item -LiteralPath "$root/$file" -Destination $source
 }
 function Copy-GitSnapshot([string]$repo, [string]$destination) {

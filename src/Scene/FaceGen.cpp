@@ -123,17 +123,11 @@ namespace SD::Scene
 		}
 
 		// Skyrim's expression list: 7 dialogue expressions, MoodNeutral, 8 mood
-		// variants and the 2 combat ones. Corroborated rather than assumed — the
-		// face probe reports n=17 on this channel for both actors on every sample.
+		// variants and 2 combat ones. The face probe reports n=17 on this channel.
 		constexpr std::uint32_t kExpressionSlots = 17;
 
-		// What one head did over the counting window.
-		//
-		// Counted rather than sampled. The old probe read state twice a second,
-		// which cannot tell a head that morphed thirty times from one that morphed
-		// once — and that ambiguity is exactly what let "lastTime advances
-		// normally" stand as evidence for a year of this investigation. These are
-		// call counts, so the distinction is the measurement.
+		// What one head did over the counting window. Call counts rather than samples,
+		// so a head morphed thirty times can be told from one morphed once.
 		struct Counts
 		{
 			std::uint64_t calls{ 0 };          // UpdateDownwardPass entered
@@ -144,21 +138,12 @@ namespace SD::Scene
 			float         timeArg{ -1.0f };
 			float         phonemePeakIn{ 0.0f };
 
-			// The peak over the WHOLE window, not the last frame's.
-			//
-			// phonemePeakIn is overwritten every call, so the report printed
-			// whatever the final frame happened to hold — which for a mouth at rest
-			// is 0.000 however loudly it moved a moment earlier. Every "the channel
-			// is flat" reading this probe has produced is that defect, not a
-			// measurement.
+			// Peak over the whole window, not the last frame's (which reads 0 for a mouth
+			// that just came to rest).
 			float peakMax{ 0.0f };
 
-			// Every slot that ever held a non-zero value, one bit each.
-			//
-			// A peak alone cannot tell a viseme TRACK from one stuck value: a mouth
-			// frozen part-open and a mouth working through a line both report "peak
-			// 0.450". A track lights several of the 16 slots across a line; a stuck
-			// value lights one. That distinction is now the whole question.
+			// Every slot that held a non-zero value, one bit each. A viseme track lights
+			// several of the 16 slots over a line; a single stuck value lights one.
 			std::uint32_t slotsSeen{ 0 };
 		};
 
@@ -182,8 +167,8 @@ namespace SD::Scene
 		std::mutex finalMutex;
 		FinalState playerFinal{}, npcFinal{};
 
-		// Resolved once per window. Comparing pointers is far cheaper than any
-		// per-call identity test, and this fires for every head in the cell.
+		// Resolved once per window; a pointer compare is cheap, and this runs for
+		// every head in the cell.
 		RE::NiPointer<RE::BSFaceGenNiNode> playerFace{};
 		RE::NiPointer<RE::BSFaceGenNiNode> npcFace{};
 		RE::ActorHandle npcActor{};
@@ -192,26 +177,11 @@ namespace SD::Scene
 		float            secondCountdown{ 0.0f };
 		std::uint32_t    secondsElapsed{ 0 };
 
-		// THE DISCRIMINATOR. -1 off; 0-15 pins that viseme slot wide open on the
-		// player's head, every frame, forever.
-		//
-		// Every reading this investigation has taken measures the channel and then
-		// argues about what the mouth was doing. This inverts it: put a value the
-		// engine cannot disagree with into the channel immediately before the pass
-		// that consumes it, and look at the face.
-		//
-		//   mouth visibly deforms -> the channel reaches the geometry. Whatever is
-		//     wrong is UPSTREAM, in what SpeakSound feeds the viseme track, and no
-		//     amount of camera work will ever have been the cause.
-		//   mouth does not move -> the channel does NOT reach the geometry, and the
-		//     cause is on the head itself: morph data, a head replacer, or the
-		//     HDT-SMP hair/beard/headgear that LIPSYNC.md §2 has flagged as
-		//     uncontrolled since the beginning.
-		//
-		// It needs no conversation, no voice mod and no line, so it cannot be
-		// confounded by "did DBVO voice that one" — the trap that produced the
-		// retracted SOLVED in §7. And a jaw held open is not a judgement call,
-		// which every previous eyeball test was.
+		// Diagnostic: -1 off; 0-15 pins that viseme slot fully open on the player's
+		// head every frame. If the mouth visibly moves, the channel reaches the
+		// geometry and any problem is upstream in what feeds the viseme track. If it
+		// doesn't, the problem is on the head itself (morph data, a head replacer, or
+		// SMP hair/beard/headgear). Needs no conversation or voice mod.
 		std::atomic_int forcedViseme{ -1 };
 
 		[[nodiscard]] float PeakOf(const RE::BSFaceGenKeyframeMultiple& a_keyframe,
@@ -260,13 +230,9 @@ namespace SD::Scene
 		{
 			static void thunk(RE::BSFaceGenNiNode* a_this, RE::NiUpdateData& a_data, std::uint32_t a_arg2)
 			{
-				// The common path, and it has to stay cheap: this runs for every
-				// facegen head in the loaded cell, every frame. Two pointer
-				// comparisons and out.
-				//
-				// The player is tracked while forcing even with no conversation
-				// open, because the forced test is deliberately not a dialogue
-				// test — see forcedViseme.
+				// The common path; runs for every facegen head in the cell every frame, so it
+				// stays at two pointer compares. The player is tracked while forcing even
+				// outside a conversation (see forcedViseme).
 				const bool active = counting.load(std::memory_order_relaxed);
 				const bool isPlayer = a_this == playerFace.get();
 				const bool isNpc = !isPlayer && active && a_this == npcFace.get();
@@ -290,9 +256,9 @@ namespace SD::Scene
 				auto&       runtime = a_this->GetRuntimeData();
 				const float lastTimeBefore = runtime.lastTime;
 
-				// Written BEFORE the original, so the pass that drains the channel
-				// drains our value. Whatever else writes phonemes this frame, it
-				// wrote earlier than this and has already been overwritten.
+				// Written before the original call, so the pass that drains the channel drains
+				// this value; anything that wrote phonemes earlier this frame has been
+				// overwritten.
 				if (isPlayer && forced >= 0) {
 					if (auto* data = runtime.animationData.get()) {
 						auto& keyframe = data->phenomeKeyFrame;
@@ -301,17 +267,9 @@ namespace SD::Scene
 						}
 					}
 				} else if (isPlayer && speaking) {
-					// Synthesized lipsync, written at the same point and for the same
-					// reason as the forced viseme above: this is the last moment in
-					// the frame before the pass consumes the channel, so whatever
-					// else drove it earlier has already been superseded.
-					//
-					// EVERY slot, including the zeros. Writing only the slots the
-					// current shape uses leaves whatever another mod parked in the
-					// others sitting in the mouth — measured, slot 5 held a constant
-					// 0.350 through an entire conversation — and that stale value
-					// blends into every shape SD forms. The mouth has to be wholly
-					// SD's for the duration of the line or it is nobody's.
+					// Synthesized lip sync, written at the same point for the same reason. Every
+					// slot is written, zeros included, so a value another mod left in an unused
+					// slot doesn't blend into SD's shape.
 					if (auto* data = runtime.animationData.get()) {
 						auto& keyframe = data->phenomeKeyFrame;
 						if (keyframe.values) {
@@ -323,9 +281,9 @@ namespace SD::Scene
 					}
 				}
 
-				// Refresh both participants immediately before their morph consumes
-				// the expression channel. Include zeros to remove conflicting moods.
-				// Mouth, blink and eye-direction channels keep their own writers.
+				// Refresh both participants right before their morph consumes the expression
+				// channel. Zeros are included to clear conflicting moods. Mouth, blink and
+				// eye-direction channels keep their own writers.
 				if (isPlayer) ApplyListener(a_this, listener, listening);
 				if (emoting) {
 					if (auto* data = runtime.animationData.get()) {
@@ -340,26 +298,12 @@ namespace SD::Scene
 					}
 				}
 
-				// The brows, and the ONE channel here that is not written whole.
-				//
-				// Both writes above deliberately stamp every slot including the
-				// zeros, because a value another mod parked in an unused slot would
-				// otherwise blend into SD's shape. That reasoning does not carry
-				// over to the modifier channel, and applying it here would be a
-				// clear regression rather than a subtle one.
-				//
-				// This channel is shared. Slots 0 and 1 are the blinks — the engine
-				// paces those off blinkDelay on this very struct, and zeroing them
-				// every frame stops the player blinking at all. Slots 8 to 11 are
-				// the eye look direction, which is head-tracking territory and on
-				// this load order is actively driven.
-				//
-				// So the named list in UpperFace::kSlots and nothing else. It is
-				// not a contiguous range: the brows are 2 to 7 and the squints are
-				// 12 and 13, with the untouchable four sitting between them.
-				// Expression profiles are the only normal writer. Only an explicit
-				// forced full-expression diagnostic suppresses
-				// modifiers; normal emotion now preserves its squints.
+				// The brows. Unlike the channels above, the modifier channel isn't written
+				// whole: slots 0-1 are blinks (paced by the engine via blinkDelay) and 8-11
+				// are eye look direction (head tracking). Only the slots in UpperFace::kSlots
+				// are written: brows 2-7 and squints 12-13. Expression profiles are the only
+				// normal writer; only the forced full-expression diagnostic suppresses
+				// modifiers.
 				if (isPlayer) {
 					if (emoting) brows.fill(0.0f);
 					if (testing) brows = testValues;
@@ -379,8 +323,8 @@ namespace SD::Scene
 				if (isPlayer) RegionalFace::After(a_this, testing);
 				if (testing) FaceTest::Record(a_this);
 
-				// Observe final channels after the original pass, not our requested
-				// override inputs. Fixed-size copy only; formatting stays on Tick.
+				// Observe the final channels after the original pass, not our requested
+				// inputs. Fixed-size copy only; formatting happens on Tick.
 				if (active) {
 					FinalState final{};
 					if (auto* data = runtime.animationData.get()) {
@@ -433,8 +377,7 @@ namespace SD::Scene
 
 			Log::Info(Log::Category::kStaging, "FaceGen morph pass | {}"sv, a_when);
 
-			// Said on every report, because a forced run that is silently not
-			// forcing looks exactly like a real one and would be read as an answer.
+			// Mentioned in every report, so a forced run isn't mistaken for a real one.
 			if (const int forced = forcedViseme.load(std::memory_order_relaxed); forced >= 0) {
 				Log::Warn(Log::Category::kStaging,
 					"  FORCING viseme slot {} to 1.0 on the player every frame. Numbers below describe the forced state, not normal play."sv,
@@ -443,8 +386,7 @@ namespace SD::Scene
 			line("PLAYER"sv, playerCounts);
 			line("npc"sv, npcCounts);
 
-			// The comparison the whole thing exists for, stated rather than left to
-			// be worked out from two rows of numbers at three in the morning.
+			// The player-versus-NPC comparison, stated directly.
 			if (npcCounts.calls > 0) {
 				const double ratio = static_cast<double>(playerCounts.calls) / static_cast<double>(npcCounts.calls);
 				if (playerCounts.calls == 0) {
@@ -460,15 +402,9 @@ namespace SD::Scene
 						ratio);
 				}
 
-				// THE READOUT THIS RUN EXISTS FOR.
-				//
-				// Forcing slot 0 to 1.0 held the player's mouth visibly open, so the
-				// phoneme channel DOES reach the player's geometry — writing it moves
-				// the mouth. The only question left is whether anything writes a real
-				// viseme track into it while the player's own voiced line plays.
-				//
-				// Meaningless while forcing, because the forced slot is one of the
-				// bits being counted.
+				// Whether anything writes a real viseme track while the player's voiced line
+				// plays. (Forcing slot 0 proved the channel reaches the geometry.) Meaningless
+				// while forcing, since the forced slot is counted.
 				if (forcedViseme.load(std::memory_order_relaxed) < 0) {
 					const std::uint32_t lit = SlotCount(playerCounts.slotsSeen);
 					if (lit == 0) {
@@ -495,9 +431,8 @@ namespace SD::Scene
 			return;
 		}
 
-		// 0x2C is a flat-Skyrim slot. VR puts it elsewhere and would take the
-		// wrong function entirely — the same reason SKSEPlugin_Load refuses VR
-		// outright for the four vtables Core/Tick patches.
+		// 0x2C is the flat-Skyrim slot; VR's vtable differs, the same reason
+		// SKSEPlugin_Load refuses VR.
 		if (REL::Module::IsVR()) {
 			Log::Warn(Log::Category::kCore, "FaceGen probe not installed: VR vtable layout differs."sv);
 			return;
@@ -528,17 +463,13 @@ namespace SD::Scene
 			return;
 		}
 
-		// Loud, and it says what to look at. A diagnostic that needs the log read
-		// to know whether it engaged is a diagnostic that gets misread.
+		// Logged as a warning so it's obvious when it's active.
 		Log::Warn(Log::Category::kStaging,
 			"FORCED VISEME {}: pinning that slot to 1.0 on the player every frame. Look at the player's mouth in third person - it should be visibly stuck open. Set [Diagnostics] iForceViseme=-1 to stop."sv,
 			slot);
 
-		// The install check does NOT belong here. Director's settings read calls
-		// this during LoadSettings, which runs before Runtime installs the hook, so
-		// it warned "the morph hook is NOT installed" ten milliseconds before the
-		// hook installed — on the 2026-08-12 run, where it was pure noise on top of
-		// a result. Runtime checks it once, after the install is final.
+		// The install check isn't done here: this runs during LoadSettings, before
+		// Runtime installs the hook. Runtime checks once the install is final.
 	}
 
 	void FaceGen::Begin(RE::Actor* a_npc)
@@ -589,27 +520,14 @@ namespace SD::Scene
 		FaceTest::Tick(a_delta);
 		RegionalFace::Prepare(RE::PlayerCharacter::GetSingleton());
 
-		// The player's head is latched unconditionally, not only inside a
-		// conversation.
-		//
-		// Begin() resolves it, but Begin only runs when the director opens — and
-		// neither of the two things that write through this hook implies a
-		// conversation. The forced viseme is deliberately testable standing in a
-		// field, and synthesized lipsync has to work with [Direction] bEnabled=0,
-		// which is the configuration that isolates it from the camera. Without this
-		// the thunk compares against a null pointer forever and both features do
-		// nothing at all, silently — which for the forced viseme would have read as
-		// "the channel does not reach the geometry", the exact wrong half of the
-		// answer it exists to give.
+		// The player's head is latched even outside a conversation, because the forced
+		// viseme and synthesized lip sync both work without one (including with
+		// bEnabled=0). Otherwise the thunk would compare against null and both would
+		// silently do nothing.
 
-		// Re-latch when the engine swaps the player's head out from under us.
-		//
-		// Begin() resolves the face node once. When the engine destroys and rebuilds
-		// it mid-conversation — measured 2026-08-10, in two of four conversations —
-		// this probe goes on counting an orphan, the count stops advancing, and the
-		// report below reads as "the player's head was never morphed again". That
-		// false signal cost a week. Performance.cpp's face hold hit the identical
-		// trap; see the heldRoot comment there.
+		// Re-latch when the engine swaps in a new head. Otherwise the probe keeps
+		// counting the old node and reports the player's head as never morphed again.
+		// Performance.cpp's face hold deals with the same thing (see heldRoot).
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto* face = player->GetFaceNodeSkinned(); face && face != playerFace.get()) {
 				{
@@ -652,9 +570,8 @@ namespace SD::Scene
 		}
 		secondCountdown = 1.0f;
 
-		// Cumulative rather than per-second, deliberately. The question is whether
-		// the player's head is being morphed at all over the exchange, and a
-		// running total is easier to read down a log than a column of deltas.
+		// Cumulative rather than per second; a running total is easier to read down a
+		// log.
 		Report(fmt::format("{}s in, cumulative", ++secondsElapsed));
 	}
 

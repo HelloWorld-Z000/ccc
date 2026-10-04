@@ -12,10 +12,8 @@ namespace SD::Scene
 		float           graphCountdown{ 0.0f };
 		Log::OnceFlag   reported;
 
-		// The target is re-pushed every frame; the graph variable only a few times
-		// a second. The first is a pointer write into HighProcessData and costs
-		// nothing. The second walks the behaviour graph, and nothing else in this
-		// mod writes to the graph per-frame — it does not need to be the first.
+		// The target is set every frame (a cheap pointer write); the graph variable
+		// only a few times a second, since it goes through the behaviour graph.
 		constexpr float kGraphInterval = 0.2f;
 
 		[[nodiscard]] RE::HighProcessData* HighOf(RE::Actor* a_actor)
@@ -36,10 +34,8 @@ namespace SD::Scene
 			return;
 		}
 
-		// Two separate things have to be true. The graph variable permits the
-		// animation graph to apply a head rotation at all; the target tells it
-		// where to look. Setting only the target does nothing, which is the trap
-		// that makes this look unfixable.
+		// Two things are needed: the graph variable allows the head rotation at all,
+		// and the target says where to look. The target alone does nothing.
 		bool previous = false;
 		if (player->GetGraphVariableBool("bHeadTracking", previous)) {
 			restoreHeadTracking = !previous;
@@ -50,8 +46,8 @@ namespace SD::Scene
 			high->SetHeadtrackTarget(RE::HighProcessData::HEAD_TRACK_TYPES::kDialogue, a_npc);
 		}
 
-		// The NPC looks back. They usually do this already, but a forcegreet or a
-		// scene line can leave them facing where they were walking.
+		// The NPC looks back. Usually they already do, but a forcegreet or scene line
+		// can leave them facing where they were walking.
 		if (auto* high = HighOf(a_npc)) {
 			high->SetHeadtrackTarget(RE::HighProcessData::HEAD_TRACK_TYPES::kDialogue, player);
 		}
@@ -90,9 +86,9 @@ namespace SD::Scene
 		if (graphCountdown <= 0.0f) {
 			graphCountdown = kGraphInterval;
 
-			// The permission half. Other mods turn this off wholesale — combat
-			// behaviour, mount transitions, and anything driving its own
-			// headtracking — and with it false the target above is inert.
+			// The permission half. Other mods switch it off (combat behaviour, mount
+			// transitions, their own head tracking), and with it false the target does
+			// nothing.
 			player->SetGraphVariableBool("bHeadTracking", true);
 		}
 	}
@@ -114,9 +110,8 @@ namespace SD::Scene
 			high->SetHeadtrackTarget(RE::HighProcessData::HEAD_TRACK_TYPES::kDialogue, nullptr);
 		}
 
-		// Only put the graph variable back if it was this that turned it on.
-		// Several mods in a heavy load order enable player headtracking wholesale,
-		// and clearing it unconditionally would break them for the rest of the run.
+		// Only clear the graph variable if this turned it on; other mods enable player
+		// head tracking too.
 		if (restoreHeadTracking) {
 			player->SetGraphVariableBool("bHeadTracking", false);
 			restoreHeadTracking = false;

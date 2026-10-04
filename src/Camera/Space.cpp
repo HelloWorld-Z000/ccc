@@ -45,13 +45,13 @@ namespace SD::Camera
 			pick.rayInput.from = RE::hkVector4{ a_from.x * havokScale, a_from.y * havokScale, a_from.z * havokScale, 0.0f };
 			pick.rayInput.to = RE::hkVector4{ a_to.x * havokScale, a_to.y * havokScale, a_to.z * havokScale, 0.0f };
 
-			// Retain the established LOS filter. Actor visibility is also tested
-			// with narrow capsules; collision-layer behavior still needs in-game
-			// verification with the installed skeletons and collision mods.
+			// Keep the established LOS filter. Actor visibility is also tested with narrow
+			// capsules; the collision-layer behaviour still needs checking in game with
+			// installed skeleton and collision mods.
 			pick.rayInput.filterInfo.filter = static_cast<std::uint32_t>(RE::COL_LAYER::kLOS) | (1u << 16);
 
-			// Preserve the established main-thread PickObject path. Its Boolean return
-			// is not a documented query-success signal; use the exposed failure flag.
+			// Keep the established main-thread PickObject path. Its bool return isn't a
+			// documented success signal, so the exposed failure flag is used.
 			a_world->PickObject(pick);
 			if (pick.pickFailed || !std::isfinite(pick.rayOutput.hitFraction) ||
 				pick.rayOutput.hitFraction < 0.0f || pick.rayOutput.hitFraction > 1.0f) {
@@ -124,8 +124,8 @@ namespace SD::Camera
 					continue;
 				}
 				if (actor.count == 0) {
-					// Missing skeleton data is uncertain only where its broad bound
-					// overlaps the tested segment; never use that bound as a blocker.
+					// Missing skeleton data is uncertain only where its broad bound overlaps the
+					// segment; that bound is never treated as a blocker.
 					unknown |= SightGeometry::SegmentHitsCapsule(G(a_from), G(a_to), G(actor.boundCenter),
 						G(actor.boundCenter), actor.boundRadius + a_padding);
 					continue;
@@ -195,8 +195,8 @@ namespace SD::Camera
 			}
 			auto* head = Head(root);
 			if (head && SightGeometry::Finite(G(head->world.translate))) {
-				// Match Anatomy's wardrobe deadband. Bone bounds are zero and are
-				// never used as a head-size measurement.
+				// Same wardrobe deadband as Anatomy. Bone bounds are zero and never used as a
+				// head size.
 				const float bulk = entry.boundRadius / reference;
 				const float scale = bulk > 0.60f && bulk < 1.85f ? 1.0f : std::pow(std::clamp(bulk, 0.15f, 8.0f), 0.6f);
 				const auto hp = head->world.translate;
@@ -212,8 +212,8 @@ namespace SD::Camera
 					entry.capsules[entry.count++] = { lower, upper, 15.0f * scale };
 				}
 			}
-			// Dead actors remain occluders. The player is appended explicitly below
-			// because the high-actor list need not contain them.
+			// Dead actors still block. The player is added explicitly below, since the
+			// high-process actor list may not include them.
 			context.actors.push_back(entry);
 		};
 		for (auto& handle : lists->highActorHandles) {
@@ -238,8 +238,8 @@ namespace SD::Camera
 			target.head = head->world.translate;
 			target.valid = SightGeometry::Finite(G(target.head));
 		}
-		// The stable composition fallback is useful to the caller, but is not
-		// evidence of an animated face when the required skeleton is unavailable.
+		// The stable composition fallback is useful to the caller, but isn't evidence
+		// of an animated face when the skeleton isn't available.
 		return target;
 	}
 
@@ -276,8 +276,8 @@ namespace SD::Camera
 			return result;
 		}
 
-		// Chest coverage is preference, not admission: counters below a readable
-		// face are allowed. Samples outside the usable frame receive no bonus.
+		// Chest coverage only affects preference: something below a readable face is
+		// allowed. Samples outside the usable frame get no bonus.
 		const SightGeometry::Point chest{ head.x, head.y, head.z - 23.0f * a_target.scale };
 		const auto halfWidth = SightGeometry::Mul(frame.right, 9.0f * a_target.scale);
 		for (const auto sample : { SightGeometry::Add(chest, halfWidth), SightGeometry::Sub(chest, halfWidth) }) {
@@ -306,9 +306,8 @@ namespace SD::Camera
 			{ 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, -1.0f }
 		};
 		for (const auto direction : directions) {
-			// Cast inward so near-surface penetration is caught even if a ray
-			// starting at the lens would miss. The subject-to-lens rays supply the
-			// longer outside-in checks for a camera embedded deeper in a wall.
+			// Cast inward so near-surface penetration is caught even if a ray from the
+			// lens would miss. The subject-to-lens rays cover a camera embedded deeper.
 			const auto from = P(SightGeometry::Add(G(a_camera), SightGeometry::Mul(direction, radius)));
 			const auto probe = CastWorld(a_context.world, from, a_camera);
 			if (probe.valid && probe.hit) {
@@ -354,11 +353,9 @@ namespace SD::Camera
 			return bundle;
 		}
 
-		// The horizontal perpendicular. Taken in the XY plane rather than from a
-		// full 3D basis because the offsets are horizontal by design — see the note
-		// in the header. A near-vertical sightline (an overhead looking straight
-		// down) has no meaningful horizontal perpendicular, and degrades to the
-		// centre ray alone rather than to a random azimuth.
+		// The horizontal perpendicular, in the XY plane (the offsets are horizontal by
+		// design). A near-vertical sightline has no useful one, so it degrades to the
+		// center ray alone.
 		const float flat = std::sqrt(delta.x * delta.x + delta.y * delta.y);
 		const bool  hasPerp = flat > 1.0e-3f;
 		const RE::NiPoint3 perp = hasPerp ?
@@ -445,13 +442,13 @@ namespace SD::Camera
 			const auto here = actor->GetPosition();
 
 			// How far along the sightline they stand. Behind the camera or past the
-			// subject is not in the way.
+			// subject isn't in the way.
 			const float along = (here.x - a_from.x) * unit.x + (here.y - a_from.y) * unit.y;
 			if (along < a_radius || along > span - a_radius) {
 				continue;
 			}
 
-			// Vertically unrelated — a guard on the floor below, or on a gantry.
+			// On a different level (a floor below, a gantry above).
 			if (std::abs(here.z - a_from.z) > 180.0f) {
 				continue;
 			}
@@ -460,10 +457,9 @@ namespace SD::Camera
 			const float offY = (here.y - a_from.y) - unit.y * along;
 			const float lateral = std::sqrt(offX * offX + offY * offY);
 
-			// Their own width, plus the width of the shot at the point they stand
-			// in it. Somebody at arm's length from the lens blocks far more of the
-			// frame than the same person standing next to the subject, which is
-			// what tapering by `along` expresses.
+			// Their own width plus the shot's width where they stand. Someone at arm's
+			// length from the lens blocks far more of the frame than someone next to the
+			// subject.
 			auto* ref3D = actor->Get3D();
 			const float body = ref3D ? std::max(ref3D->worldBound.radius, 24.0f) : 34.0f;
 			const float reach = body + a_radius * (1.0f - along / span);

@@ -75,14 +75,33 @@ int main()
 	for (int frame = 0; frame < 5; ++frame) {
 		held.Update(21, false, false, false, 0.1f);
 	}
+	Expect(held.Holding() && !held.Active(), "the hold covers the silence before the reply");
 	held.Update(21, false, true, false, 0.1f);
-	Expect(held.Holding() && !held.Active(), "the reply starting does not cut the hold short");
+	Expect(!held.Holding() && held.Active(), "the reply starting ends the hold at once");
 	for (int frame = 0; frame < 5; ++frame) {
 		held.Update(21, false, true, false, 0.1f);
+		Expect(!held.Holding() && held.Active(), "the camera stays on the NPC for the reply");
+	}
+	held.Update(21, false, false, false, 0.1f);
+	Expect(!held.Holding() && !held.Active(), "the reply ending releases the handoff");
+
+	// No silence at all, which is DBReV with no post-line delay: the reply
+	// arrives on the frame the voice stops, and the camera goes with it.
+	held.Update(25, true, false, false, 0.1f);
+	held.Update(25, false, true, false, 0.1f);
+	Expect(!held.Holding() && held.Active(), "a reply on the voice's last frame is not held");
+
+	// A long silence still runs the hold out before the reply.
+	held.Update(26, true, false, false, 0.1f);
+	held.Update(26, false, false, false, 0.1f);
+	for (int frame = 0; frame < 12; ++frame) {
+		held.Update(26, false, false, false, 0.1f);
 	}
 	Expect(!held.Holding() && held.Active(), "the handoff arrives when the hold runs out");
-	held.Update(21, false, false, false, 0.1f);
-	Expect(!held.Holding() && !held.Active(), "the reply ending releases a handoff that arrived late");
+	held.Update(26, false, true, false, 0.1f);
+	Expect(held.Active(), "a late reply keeps the handoff");
+	held.Update(26, false, false, false, 0.1f);
+	Expect(!held.Holding() && !held.Active(), "the reply ending releases a handoff that arrived first");
 
 	held.Update(22, true, false, false, 0.1f);
 	held.Update(22, false, false, false, 0.1f);
@@ -96,9 +115,10 @@ int main()
 	held.Update(23, false, false, false, 0.1f);
 	for (int frame = 0; frame < 4; ++frame) {
 		held.Update(23, false, true, false, 0.1f);
+		Expect(held.Active(), "a short reply is still covered from its first frame");
 	}
 	held.Update(23, false, false, false, 0.1f);
-	Expect(!held.Holding() && !held.Active(), "a reply shorter than the hold ends with the camera still on the player");
+	Expect(!held.Holding() && !held.Active(), "a reply shorter than the hold hands back when it ends");
 
 	held.SetDelay(-1.0f);
 	held.Update(24, true, false, false, 0.1f);

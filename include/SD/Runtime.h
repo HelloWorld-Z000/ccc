@@ -9,32 +9,24 @@ namespace SD::Runtime
 {
 	void Initialize();
 
-	// Called once per frame from the PlayerCamera::Update hook, after the game's
-	// own camera update has run.
+	// Called once per frame from the frame source, after the game's own camera
+	// update.
 	void OnFrame(RE::PlayerCamera* a_camera, float a_delta);
 
-	// Ticks observed since load. Read by the engine-driven menu watch to prove
-	// whether the frame source is actually per-frame.
+	// Ticks since load. Logged by the menu watch to confirm the frame source runs
+	// every frame.
 	[[nodiscard]] std::uint64_t FrameCount() noexcept;
 
-	// The conversation Runtime believes it has staged is no longer staged, so let
-	// it be staged again.
-	//
-	// Runtime opens once per partner and will not reopen while that key still
-	// matches, because the branch that used to reopen on any release fought the
-	// exit path: leaving mid-line releases the director while the session runs on
-	// through the NPC's trailing line, and it was reopened, released and reopened
-	// once a second until they stopped talking.
-	//
-	// That rule is right and stays. This is how the one release that genuinely
-	// expects to come back says so — the director handing the screen to a menu a
-	// dialogue topic opened, with the same conversation still waiting underneath
-	// it.
+	// Lets the conversation Runtime thinks it staged be staged again. Runtime
+	// opens once per partner and won't reopen while the key matches (reopening on
+	// any release used to fight the exit path). This is how the Director says a
+	// release is expected to come back: it handed the screen to a menu a dialogue
+	// topic opened, with the conversation still waiting underneath.
 	void RearmConversation();
 
 	void OnGameLoaded();
 
 	// A load is starting. Drop everything that refers to the outgoing world,
-	// synchronously, on this thread.
+	// synchronously.
 	void AbandonForLoad();
 }

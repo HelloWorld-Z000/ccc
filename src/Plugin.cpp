@@ -15,15 +15,11 @@ namespace
 
 		switch (a_message->type) {
 		case SKSE::MessagingInterface::kPostLoad:
-			// Not at plugin load. SKSE loads plugins alphabetically, so
-			// SceneDirector.dll is registered before SmoothCam.dll and asking for
-			// SmoothCam's listener that early fails outright. kPostLoad is the
-			// first point at which every plugin has registered.
+			// Not at plugin load: SKSE loads plugins alphabetically, so SmoothCam isn't
+			// registered yet. kPostLoad is the first point where every plugin has loaded.
 			SD::Compat::SmoothCam::Register();
 
-			// Same constraint, same reason, and DBReV's author names it as the
-			// first thing that bites integrators: registering before DBReV.dll has
-			// loaded returns false and leaves a listener that never fires.
+			// Same for DBReV: registering before DBReV.dll loads silently fails.
 			SD::Compat::DBReV::Register();
 			break;
 
@@ -51,20 +47,15 @@ EXTERN_C [[maybe_unused]] __declspec(dllexport) bool SKSEAPI SKSEPlugin_Load(con
 	SD::Log::Setup(Plugin::NAME);
 	SD::Log::Info(SD::Log::Category::kCore, "{} {} loading."sv, Plugin::DISPLAY_NAME, Plugin::VERSION.string("."sv));
 
-	// Pass false: CommonLibSSE-NG 7 added an a_log parameter that defaults to TRUE,
-	// and it does more than add a banner. log::init() reopens this same file with
-	// truncate, wiping the line logged just above, then replaces the default logger
-	// and the pattern. Log::Setup above already rotated the previous log and set the
-	// format this project reads. Let it own the log.
+	// Pass false: CommonLibSSE-NG 7's a_log parameter defaults to true, and
+	// log::init() reopens this file with truncate (wiping what Log::Setup just
+	// wrote) and replaces the logger and pattern. Log::Setup owns the log.
 	SKSE::Init(a_skse, false);
 
-	// SE and AE only. Every vtable index this mod writes — Actor::Update (0xAD),
-	// UpdateInDialogue (0x4C), TESCamera::Update (0x02), camera state Update (0x03)
-	// — is a flat-Skyrim index. CommonLibSSE-NG says so itself: it declares
-	// `Actor::Update` with SKYRIM_REL_VR_VIRTUAL, which expands to nothing in a
-	// multi-target build precisely because the VR slot is elsewhere. The VTABLE
-	// addresses still resolve under VR, so without this check write_vfunc would
-	// happily overwrite the wrong slots and corrupt every actor in the game.
+	// SE and AE only. Every vtable index written here (Actor::Update 0xAD,
+	// UpdateInDialogue 0x4C, TESCamera::Update 0x02, camera state Update 0x03) is
+	// a flat-Skyrim index; the VR slots differ, and the VTABLE addresses still
+	// resolve under VR, so write_vfunc would overwrite the wrong slots.
 	if (REL::Module::IsVR()) {
 		SD::Log::Error(SD::Log::Category::kCore,
 			"Skyrim VR detected. Scene Director hooks flat-Skyrim vtable slots and will not install."sv);
@@ -88,21 +79,13 @@ EXTERN_C [[maybe_unused]] __declspec(dllexport) constinit auto SKSEPlugin_Versio
 	data.AuthorName("Scene Director");
 	data.UsesAddressLibrary();
 
-	// Read SKSE's own words for this flag before changing it — the CommonLib name
-	// is misleading. `kVersionIndependentEx_NoStructUse` is documented as "set this
-	// if your plugin either doesn't use any game structures **or has put in
-	// extraordinary effort to work with pre and post 1.6.629 structure layout**".
-	// The second clause is this build: every version-dependent member is reached
-	// through CommonLibSSE-NG's `RelocateMemberIfNewer(RUNTIME_SSE_1_6_629, ...)`
-	// accessors (`GetActorRuntimeData()` and friends), which pick the offset from
-	// the running exe, and the target is compiled with ENABLE_SKYRIM_SE and
-	// ENABLE_SKYRIM_AE so both layouts are present in the binary.
-	//
-	// Leaving this call out is what made SKSE refuse the plugin on 1.6.1170 with
-	// "disabled, only compatible with versions earlier than 1.6.629" — the gate in
-	// PluginManager.cpp fires on any address-library plugin that claims neither
-	// this flag nor StructsPost629. StructsPost629 is the wrong alternative: it
-	// asserts the binary is post-629 *only*, which would give up 1.6.317–1.6.353.
+	// kVersionIndependentEx_NoStructUse covers plugins that either don't use game
+	// structures or handle both the pre- and post-1.6.629 layouts. This build does
+	// the latter: every version-dependent member goes through CommonLibSSE-NG's
+	// RelocateMemberIfNewer accessors (GetActorRuntimeData() and friends), and the
+	// target is built with both ENABLE_SKYRIM_SE and ENABLE_SKYRIM_AE. Without
+	// this flag SKSE refuses the plugin on 1.6.629 and later. StructsPost629 would
+	// be wrong: it drops support for 1.6.317-1.6.353.
 	data.UsesNoStructs();
 	return data;
 }();

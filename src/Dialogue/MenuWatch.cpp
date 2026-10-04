@@ -18,32 +18,18 @@ namespace SD::Dialogue
 			return raw && std::string_view{ raw } == RE::DialogueMenu::MENU_NAME;
 		}
 
-		// The pausing menus currently open, by name.
-		//
-		// Kept as names rather than as a bare count because the flag can only be
-		// asked on the way IN. On the close event the menu is on its way out of the
-		// map and GetMenu may already return nothing, so "was this one of mine"
-		// has to be answered from what was recorded when it opened. Anything else
-		// decrements on menus it never counted and the total drifts.
-		//
-		// Small by construction — the deepest real stack is a book or a container
-		// opened out of a barter menu — so a vector is the right shape and a scan
-		// is cheaper than a hash.
+		// The screen-owning menus currently open, by name. Names rather than a count
+		// because the flags can only be checked on open; on close the menu may already
+		// be gone from the map, so whether it was counted has to be remembered. The
+		// stack is never deep, so a vector and a scan are fine.
 		std::vector<std::string> pausingMenus;
 
-		// PUBLISHED TO THE RENDER THREAD, because it cannot ask this question.
-		//
-		// The letterbox is drawn from the Present hook, which keeps running while
-		// the game thread is stopped — so it has to decide for itself whether the
-		// bars belong on screen. It used to decide with RE::UI::GameIsPaused(),
-		// which answers a broader question than the one it meant and answers YES
-		// for the Console and for SKSE Menu Framework's own settings panel. See
-		// Letterbox::SetScreenTaken for what that cost.
-		//
-		// This list is the narrower answer and already carries the Console
-		// exemption, so it is simply pushed across whenever it changes. Called from
-		// every place that can change it and nowhere else.
-		// The last published answer, so the falling edge can be spotted.
+		// Published to the render thread, which can't ask this itself. The letterbox
+		// is drawn from Present, which keeps running while the game thread is stopped,
+		// so it needs to know whether a menu owns the screen. (GameIsPaused also
+		// counts the Console and SKSE Menu Framework's own panel; see
+		// Letterbox::SetScreenTaken.) Called from every place that changes the list.
+		// The last published value, so the falling edge can be detected.
 		bool screenWasTaken{ false };
 
 		void PublishScreenTaken()
@@ -51,68 +37,32 @@ namespace SD::Dialogue
 			const bool taken = !pausingMenus.empty();
 			Render::Letterbox::SetScreenTaken(taken);
 
-			// AND THE FALLING EDGE GOES TO THE DIRECTOR, because it is the only
-			// place that edge exists.
-			//
-			// The director will not sample the camera's resting state for half a
-			// second after a menu lets go. It used to time that from its own tick,
-			// which sees nothing at all while a pausing menu is up — so the freshest
-			// thing it knew was when the menu OPENED, and a container held open for
-			// longer than the window made the window a no-op. This callback is the
-			// close itself, delivered from the one place still running.
-			//
-			// Here rather than in the close branch below so that Reconcile's sweep —
-			// which clears menus whose close event never arrived — publishes the
-			// same edge. One writer, both paths.
+			// The falling edge goes to the Director, which waits a moment after a menu
+			// closes before sampling the camera again. Its own tick can't see the close
+			// (the frame source stops while a pausing menu is up). Done here so the
+			// Reconcile sweep publishes the same edge.
 			if (screenWasTaken && !taken) {
 				Camera::Director::OnScreenReleased();
 			}
 			screenWasTaken = taken;
 		}
 
-		// THE ONE EXCEPTION, AND WHY IT IS NAMED RATHER THAN GUESSED AT.
-		//
-		// The console pauses the game like any other menu, so it stops the tick and
-		// would otherwise end the scene. It should not, and the difference is not
-		// taste: every menu a dialogue topic opens takes the CONVERSATION with it —
-		// the movie's phase moves on, the topic list is spent, the engine hands
-		// dialogue to the sub-menu — and the console takes nothing. It is an
-		// overlay over a scene that is still exactly where it was, so freezing
-		// through it and carrying on is correct, and releasing would put a cut in
-		// the middle of somebody looking something up.
-		//
-		// This is the whole list. A second entry needs the same argument made for
-		// it, not a resemblance to this one.
+		// The one exception. The console pauses the game like other menus, but it's an
+		// overlay over a conversation that hasn't moved, whereas menus opened by a
+		// dialogue topic take over the conversation. Anything added here needs the
+		// same argument.
 		constexpr std::array kOverlayMenus{
 			"Console"sv,
 			"Console Native UI Menu"sv,
 		};
 
-		// Whether the menu now opening is one that owns the screen.
-		//
-		// TWO TESTS, AND THE SECOND ONE IS THE INVENTORY REGRESSION.
-		//
-		// The first is kPausesGame, read off the live menu because a menu's flags
-		// belong to the menu and not to a list this mod would have to keep in step
-		// with every mod that adds one. It covers the player inventory, containers,
-		// barter, gifts, magic, favourites, training, books, the map and the
-		// journal — everything a dialogue topic can put in front of you and
-		// everything the player can open on their own.
-		//
-		// The second is kInventoryItemMenu, and without it the set has a hole
-		// exactly where the reports were. CraftingMenu carries kInventoryItemMenu
-		// and NOT kPausesGame — it is the one item menu in the game that leaves the
-		// world running — so a smithing or enchanting screen opened from a topic
-		// passed the first test and the cinematic stayed up over it, bars and all,
-		// with the HUD elements those menus borrow still hidden. The Present hook's
-		// own retraction reads GameIsPaused and had the same hole, which is why the
-		// bars were still on screen rather than merely late.
-		//
-		// Asked as a flag rather than by name so a replacer or a mod-added item
-		// menu is covered by construction. The flag bits are read straight off
-		// menuFlags: several of IMenu's accessors are wired to the wrong enumerator
-		// in this CommonLibSSE, and PausesGame is the only one of them that is
-		// correct.
+		// Whether the menu now opening owns the screen. Two tests: kPausesGame
+		// (inventory, containers, barter, gifts, magic, favourites, training, books,
+		// map, journal), and kInventoryItemMenu, which catches CraftingMenu, the one
+		// item menu that doesn't pause the game. Asked as flags so replacers and
+		// mod-added menus are covered. The flag bits are read directly from menuFlags
+		// because several IMenu accessors in this CommonLibSSE test the wrong
+		// enumerator (PausesGame is correct).
 		bool TakesScreen(const RE::BSFixedString& a_name)
 		{
 			const char* raw = a_name.c_str();
@@ -151,23 +101,11 @@ namespace SD::Dialogue
 			return;
 		}
 
-		// ASKED PER MENU, NOT OFF THE PAUSE COUNTER.
-		//
-		// This used to clear the whole record the moment GameIsPaused went false,
-		// on the reasoning that a record built from paired events can be left
-		// holding a menu whose close was never delivered — a load, a mod
-		// force-closing something — and that would be permanent, because no
-		// conversation would ever stage again.
-		//
-		// The reasoning is right and the instrument was wrong, and it broke the
-		// moment a menu that does NOT pause the game joined the set. CraftingMenu
-		// is exactly that: the record would be taken on the open event and then
-		// thrown away by the very next tick, because the game was still running —
-		// and Runtime would stage a conversation behind a smithing screen.
-		//
-		// Whether a menu is open is a question ui can answer directly, so it is
-		// asked directly. Same guarantee against a lost close event, no dependence
-		// on what the menu does to the clock.
+		// Asked per menu rather than from the pause counter. A record built from
+		// paired events can be left holding a menu whose close was never delivered,
+		// which would block staging for good; but clearing everything when the game
+		// unpauses breaks CraftingMenu, which doesn't pause. So each recorded menu is
+		// checked against the UI directly.
 		std::erase_if(pausingMenus, [ui](const std::string& a_name) {
 			if (ui->IsMenuOpen(a_name)) {
 				return false;
@@ -210,16 +148,9 @@ namespace SD::Dialogue
 		}
 
 		if (!IsDialogueMenu(a_event->menuName)) {
-			// EVERY OTHER MENU, WHICH THIS USED TO DROP ON THE FLOOR.
-			//
-			// The filter above was the whole body of this function's guard, so the
-			// one callback in this mod that still runs while the game is paused
-			// listened for exactly one menu and ignored the rest. The menus it was
-			// ignoring are the ones a dialogue topic opens — training, barter,
-			// gifts, a book — and every one of those stops the frame source, which
-			// is where the director's own "another menu took the screen" release
-			// lives. It could not fire, so a topic that opened a menu left the
-			// scene frozen with the topic list hidden and the camera let go.
+			// Every other menu. This is the one callback that still runs while the game is
+			// paused, so it's where menus opened by a dialogue topic (training, barter,
+			// gifts, books) are noticed.
 			const char* raw = a_event->menuName.c_str();
 			if (!raw || !*raw) {
 				return RE::BSEventNotifyControl::kContinue;
@@ -228,18 +159,16 @@ namespace SD::Dialogue
 			const auto        known = std::find(pausingMenus.begin(), pausingMenus.end(), name);
 
 			if (a_event->opening) {
-				// Guarded against a repeat open: a menu re-registering without an
-				// intervening close would otherwise be recorded twice and the screen
-				// would never be handed back.
+				// Guard against a repeat open, which would otherwise be recorded twice and
+				// never cleared.
 				if (known == pausingMenus.end() && TakesScreen(a_event->menuName)) {
 					pausingMenus.push_back(name);
 					PublishScreenTaken();
 					Camera::Director::OnScreenTaken(name);
 				}
 			} else if (known != pausingMenus.end()) {
-				// Nothing to tell the director. It released when the screen was
-				// taken; Runtime stages the conversation again on the next tick,
-				// which is the first one after the game starts running.
+				// Nothing to tell the Director: it released when the screen was taken, and
+				// Runtime restages on the first tick after the game resumes.
 				pausingMenus.erase(known);
 				PublishScreenTaken();
 			}
@@ -253,9 +182,8 @@ namespace SD::Dialogue
 		const auto since = frames - lastReportedFrame;
 		lastReportedFrame = frames;
 
-		// Report what the polled source believes at the exact moment the engine
-		// says the menu changed. If these two disagree the log says so here, rather
-		// than the director quietly trusting the wrong one later.
+		// Report what the polled state says at the moment the engine says the menu
+		// changed, so any disagreement shows up in the log here.
 		std::string_view speakerState = "no manager"sv;
 		std::string_view topicState = "no manager"sv;
 		if (auto* manager = RE::MenuTopicManager::GetSingleton()) {
@@ -269,8 +197,8 @@ namespace SD::Dialogue
 			"Dialogue Menu {} | {} ticks total (+{} since last menu event) | manager: {}, {}"sv,
 			a_event->opening ? "OPEN "sv : "CLOSE"sv, frames, since, speakerState, topicState);
 
-		// Only meaningful when the frame source is actually installed; with it off
-		// by default a zero delta is expected, not a finding.
+		// Only meaningful when the frame source is installed; otherwise a zero delta
+		// is expected.
 		if (since == 0 && Core::Tick::Installed()) {
 			Log::Error(Log::Category::kDialogue,
 				"Frame source did not advance between menu events — PlayerCamera::Update is not a per-frame tick."sv);

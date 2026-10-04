@@ -1,4 +1,5 @@
 #include "SD/Camera/Shot.h"
+#include "SD/Camera/FaceFrame.h"
 #include "SD/Camera/ShotAngles.h"
 
 #include "SD/Camera/Space.h"
@@ -10,46 +11,23 @@ namespace SD::Camera
 		constexpr float kPi = 3.14159265358979323846f;
 		constexpr float kDeg = kPi / 180.0f;
 
-		// WHAT USED TO BE HERE: kSubjectExtent (42), kMinSubjectDistance (68) and
-		// kProbeStart (48), the three numbers that described a standing human and
-		// were applied to everything.
-		//
-		// They live in Anatomy now, as the humanoid defaults, and arrive per subject
-		// scaled by what was actually measured. Nothing about a person changed — a
-		// human still measures 1.0 and gets 42, 68 and 48 — but a dragon no longer
-		// gets them too. See Anatomy.h for what each one is for; the probe is the
-		// one whose being wrong stopped the mod working at all rather than merely
-		// framing badly.
-
-		// How far the camera stops short of whatever is behind it.
-		//
-		// Lowered from 26: combined with the floor it demanded 108 units of clear
-		// space before any shot would place, which ordinary interiors do not offer
-		// in most directions, so composed shots failed constantly and the emergency
-		// single took over.
+		// How far the camera stops short of whatever is behind it. Kept small so
+		// ordinary interiors still have room for composed shots.
 		constexpr float kWallMargin = 14.0f;
 
-		// How wide the camera is, for the far end of a probe bundle.
-		//
-		// Left where it is rather than raised alongside the margin above: the
-		// margin is axial clearance and the bundle is lateral, so between them the
-		// lens now has room on both counts where before it had a single line down
-		// the middle and 14 units of nose.
+		// Camera radius, for the far end of a probe bundle. The margin above is axial
+		// clearance; this is lateral.
 		constexpr float kCameraRadius = 18.0f;
 
-		// Continuity limits depend on the camera's anchor. The shot's own
-		// adjustment window is intersected with these limits by ShotAngles.
+		// Continuity limits depend on the camera's anchor. ShotAngles intersects the
+		// shot's own adjustment window with these.
 		constexpr float kLineFloorSubject = 8.0f;
 		constexpr float kLineFloorMidpoint = 34.0f;
 
-		// The lens palette, in degrees of HORIZONTAL field of view.
-		//
-		// These are the real axis of difference between two shots of the same
-		// person at the same size. A face at 40 degrees is compressed, flattened
-		// and separated from its background; the same face at 95 has a nose
-		// reaching for the lens and half the room behind it. Skyrim's default sits
-		// around 75-90 depending on the player's own settings, so anything under
-		// 60 reads immediately as "a camera", which is the point.
+		// Lens palette, in degrees of horizontal field of view. The lens is the main
+		// difference between two shots of the same person at the same size: 40 degrees
+		// compresses and isolates a face, 95 puts half the room behind it. Skyrim's
+		// default is around 75-90, so anything under 60 reads as a camera.
 		constexpr float kLensTele = 40.0f;      // across the room; surveillance
 		constexpr float kLensLong = 50.0f;      // portrait glass; compresses
 		constexpr float kLensPortrait = 60.0f;  // flattering but not obviously long
@@ -69,38 +47,26 @@ namespace SD::Camera
 			Aim    aim;
 			Move   move;
 
-			// Horizontal field of view for this setup. Distance is then solved for
-			// the fill AT THIS LENS, so fill still means what it says: the subject
-			// occupies the same slice of frame either way, and the lens changes
-			// what that slice looks like rather than how big it is.
+			// Horizontal field of view for this setup. Distance is solved for the fill at
+			// this lens, so the subject takes the same share of frame either way; the lens
+			// changes how it looks, not how big it is.
 			float lens;
 
-			// Units depend on move: a fraction of the standoff for push/pull, a
-			// fraction of the lens for zoom, world units for crane and tilt,
-			// degrees for drift.
+			// Units depend on the move: a fraction of the standoff for push/pull, a
+			// fraction of the lens for zoom, world units for crane and tilt, degrees for
+			// drift.
 			float moveAmount;
 
-			// Where the subject sits IN FRAME, normalised to the half-frame, so
-			// 0.33 is a third of the way out from centre. Positive headroom puts
-			// them ABOVE centre — which is where a face belongs, eyes on the upper
-			// third. Positive lookRoom puts them to the side, leaving the space
-			// they are looking into open in front of them.
-			//
-			// Nothing in the mod did this before: every shot aimed dead at a head,
-			// so every shot put a head in the exact middle of frame. That alone
-			// makes forty setups look like one.
+			// Where the subject sits in frame, as a fraction of the half-frame (0.33 is a
+			// third of the way out from center). Positive headroom puts them above center,
+			// where a face belongs; positive lookRoom leaves space in the direction
+			// they're looking.
 			float headroom;
 			float lookRoom;
 		};
 
-		// The shot table.
-		//
-		// Read down the lens and move columns rather than across a row: those two
-		// are what make one setup a different image from another, and they are the
-		// two the old table did not have. Within the close range alone this now
-		// runs from a locked 50mm-equivalent portrait to a 88-degree push-in that
-		// puts the lens close enough to distort — two shots the old table
-		// described with nearly the same four numbers.
+		// The shot table. The lens and move columns are what make one setup look
+		// different from another.
 		[[nodiscard]] constexpr ShotSpec SpecFor(ShotType a_type)
 		{
 			using A = Anchor;
@@ -118,114 +84,75 @@ namespace SD::Camera
 			case ShotType::kCloseLow:           return { true,  0.66f, 44.0f, -18.0f, false, A::kSubject, Aim::kSubject, M::kPushIn,   kLensPortrait, 0.14f, 0.12f, 0.14f };
 			case ShotType::kCloseHigh:          return { true,  0.60f, 50.0f,  26.0f, false, A::kSubject, Aim::kSubject, M::kTiltDown, kLensNormal,   14.0f, 0.10f, 0.14f };
 
-			// A loose single on a WIDE lens, which is the whole reason it exists
-			// separately from the close-up above: same person, same side of the
-			// eyeline, and an entirely different image because of the glass.
+			// A loose single on a wide lens. Same person and side as the close-up above,
+			// but a very different image.
 			case ShotType::kCloseWide:          return { true,  0.30f, 58.0f,   8.0f, false, A::kSubject, Aim::kSubject, M::kPushIn,   kLensWide,     0.12f, 0.08f, 0.18f };
 
-			// Tighter than any other setup. 0.85 fill crops below the chin, which
-			// is the point — it is only offered on an intensity-100 line, and the
-			// emotion scan puts those at 5-8% of dialogue.
-			//
-			// On the LONGEST lens in the table, and that is what makes it work at
-			// all. It was on the widest, on the reasoning that a wide lens close to
-			// a face is uncomfortable and this is the shot allowed to be — but a
-			// wide lens has to get physically close to fill a frame, and 0.85 at 88
-			// degrees solves to 47 units, which is inside the 68-unit floor that
-			// keeps the lens out of somebody's chest. Clamped to the floor it
-			// rendered at about 0.60 fill: the setup named "extreme" was LOOSER on
-			// screen than the plain close-up, whose 0.68 on a long lens solves to
-			// 119 and is delivered exactly.
-			//
-			// At 40 degrees the same 0.85 solves to 121 — clear of the floor, so
-			// the fill is actually delivered — and the compression does the work
-			// the proximity was supposed to: the face fills the frame, flattened
-			// and cut off from its background.
-			//
-			// LOCKED OFF as of 2026-08-13, and it used to push in at 0.18 — the
-			// largest move in the table. Reported as "extreme close-up is zooming
-			// in with zoom off", which it was not: a push-in is a dolly and
-			// survived the zoom removal because it is a different move. It read as
-			// a zoom anyway, and on the tightest framing in the mod it should: the
-			// shot is already at the end of its travel, so closing another quarter
-			// of the standoff has nowhere to go and nothing to reveal. Anyone who
-			// wants motion here can ask for it on the setup's own row.
+			// The tightest setup: 0.85 fill crops below the chin. On the longest lens in
+			// the table, because a wide lens would have to get closer than the 68-unit
+			// floor to fill the frame and would end up looser than the plain close-up. At
+			// 40 degrees the same fill solves to about 121 units. Locked off: the shot is
+			// already at the end of its travel.
 			case ShotType::kExtremeClose:       return { true,  0.85f, 22.0f,   1.0f, false, A::kSubject, Aim::kSubject, M::kLocked,   kLensTele,     0.00f, 0.10f, 0.08f };
 
-			// Dirty singles. overShoulder is what keeps the listener in the corner
-			// of frame; the tight fill is what separates these from the wide OTS.
+			// Dirty singles. overShoulder keeps the listener in the corner of frame; the
+			// tight fill separates these from the wide OTS.
 			case ShotType::kDirtyNpc:           return { true,  0.58f, 15.0f,   3.0f, true,  A::kSubject, Aim::kSubject, M::kLocked,   kLensPortrait, 0.00f, 0.14f, 0.24f };
 			case ShotType::kThreeQuarterNpc:    return { true,  0.46f, 40.0f,   5.0f, false, A::kSubject, Aim::kSubject, M::kDrift,    kLensNormal,   10.0f, 0.14f, 0.18f };
 			case ShotType::kMediumProfile:      return { true,  0.34f, 66.0f,   4.0f, false, A::kSubject, Aim::kSubject, M::kLocked,   kLensLong,     0.00f, 0.12f, 0.22f };
 			case ShotType::kLowProfile:         return { true,  0.50f, 78.0f, -22.0f, false, A::kSubject, Aim::kSubject, M::kTiltUp,   kLensWide,     16.0f, 0.08f, 0.20f };
 			case ShotType::kOverhead:           return { true,  0.28f, 40.0f,  62.0f, false, A::kSubject, Aim::kSubject, M::kCraneDown, kLensWide,    26.0f, 0.00f, 0.10f };
 
-			// Height on an over-the-shoulder costs more rise than it does on a
-			// clean single, and the reason is the shoulder. These stand a body's
-			// length further back than a single does — the OTS rule below forces
-			// the standoff past the other participant — so a given rise subtends a
-			// much shallower angle from there. The +-20 that reads as a definite
-			// tilt on kCloseLow barely registers here, hence -26 and 34.
+			// Over-the-shoulder shots stand further back than singles (past the other
+			// person), so the same rise gives a shallower angle. Hence -26 and 34 here
+			// versus +-20 on kCloseLow.
 			case ShotType::kOverPlayerShoulderLow:  return { true,  0.46f, 22.0f, -26.0f, true, A::kSubject, Aim::kSubject, M::kPushIn,   kLensPortrait, 0.12f, 0.10f, 0.22f };
 			case ShotType::kOverPlayerShoulderHigh: return { true,  0.40f, 24.0f,  34.0f, true, A::kSubject, Aim::kSubject, M::kTiltDown, kLensNormal,   16.0f, 0.10f, 0.22f };
 			case ShotType::kOverPlayerShoulderWide: return { true,  0.24f, 28.0f,  12.0f, true, A::kSubject, Aim::kSubject, M::kPullOut,  kLensWide,     0.14f, 0.02f, 0.18f };
 
-			// ---- Player coverage ----------------------------------------------
+			// ---- Player coverage ---------------------------------------------------
 			case ShotType::kOverNpcShoulder:    return { false, 0.40f, 20.0f,   6.0f, true,  A::kSubject, Aim::kSubject, M::kLocked,   kLensPortrait, 0.00f, 0.12f, 0.22f };
 			case ShotType::kMediumPlayer:       return { false, 0.38f, 34.0f,   4.0f, false, A::kSubject, Aim::kSubject, M::kDrift,    kLensNormal,   8.0f,  0.14f, 0.16f };
 			case ShotType::kHighAngle:          return { false, 0.34f, 30.0f,  38.0f, false, A::kSubject, Aim::kSubject, M::kCraneDown, kLensNormal,  24.0f, 0.06f, 0.14f };
 			case ShotType::kClosePlayer:        return { false, 0.60f, 26.0f,   2.0f, false, A::kSubject, Aim::kSubject, M::kLocked,   kLensLong,     0.00f, 0.16f, 0.14f };
 
-			// Mirrors kExtremeClose exactly, including the long lens. See the note
-			// there for why the tightest setup in the table is on the NARROWEST
-			// glass: a wide lens has to get physically close to fill a frame, and
-			// 0.85 fill at 88 degrees solves inside the 68-unit floor, so the shot
-			// named "extreme" renders LOOSER than the plain close-up.
+			// Mirrors kExtremeClose, including the long lens (see there).
 			case ShotType::kExtremeClosePlayer: return { false, 0.85f, 22.0f,   1.0f, false, A::kSubject, Aim::kSubject, M::kLocked,   kLensTele,     0.00f, 0.10f, 0.08f };
 			case ShotType::kDirtyPlayer:        return { false, 0.55f, 15.0f,   3.0f, true,  A::kSubject, Aim::kSubject, M::kLocked,   kLensPortrait, 0.00f, 0.14f, 0.24f };
 			case ShotType::kPlayerProfile:      return { false, 0.40f, 70.0f,   2.0f, false, A::kSubject, Aim::kSubject, M::kLocked,   kLensLong,     0.00f, 0.12f, 0.22f };
 			case ShotType::kPlayerLow:          return { false, 0.52f, 32.0f, -20.0f, false, A::kSubject, Aim::kSubject, M::kTiltUp,   kLensWide,     16.0f, 0.10f, 0.14f };
 			case ShotType::kThreeQuarterPlayer: return { false, 0.44f, 40.0f,   5.0f, false, A::kSubject, Aim::kSubject, M::kDrift,    kLensNormal,   10.0f, 0.14f, 0.18f };
 
-			// Deliberately matched to their NPC-side counterparts — same size,
-			// same height, same lens, same move. A reverse shot is supposed to
-			// match the shot it answers; matched glass is what makes a pair of
-			// angles read as one conversation rather than two separate cameras.
+			// Matched to their NPC-side counterparts (size, height, lens, move), so a
+			// reverse reads as the other half of the same conversation.
 			case ShotType::kOverNpcShoulderLow:  return { false, 0.44f, 22.0f, -26.0f, true, A::kSubject, Aim::kSubject, M::kPushIn,   kLensPortrait, 0.12f, 0.10f, 0.22f };
 			case ShotType::kOverNpcShoulderHigh: return { false, 0.38f, 24.0f,  34.0f, true, A::kSubject, Aim::kSubject, M::kTiltDown, kLensNormal,   16.0f, 0.10f, 0.22f };
 			case ShotType::kOverNpcShoulderWide: return { false, 0.24f, 28.0f,  12.0f, true, A::kSubject, Aim::kSubject, M::kPullOut,  kLensWide,     0.14f, 0.02f, 0.18f };
 			case ShotType::kLongPlayer:          return { false, 0.16f, 42.0f,  16.0f, false, A::kSubject, Aim::kSubject, M::kCraneUp,  kLensWide,     34.0f, -0.10f, 0.12f };
 			case ShotType::kPlayerOverhead:      return { false, 0.28f, 40.0f,  62.0f, false, A::kSubject, Aim::kSubject, M::kCraneDown, kLensWide,   26.0f, 0.00f, 0.10f };
 
-			// ---- Neutral: the pair ---------------------------------------------
+			// ---- Neutral: the pair -------------------------------------------------
 			//
-			// Anchored to the MIDPOINT rather than to a head. These used to reach
-			// the midpoint by a side effect — a 90-degree lateral made the old
-			// solver aim between the two — which meant "frame both of them" and
-			// "stand side-on" could never be asked for separately.
+			// Anchored to the midpoint between the two, so framing both and the angle can
+			// be set independently.
 			case ShotType::kTwoShot:            return { true,  0.20f, 90.0f,   8.0f, false, A::kMidpoint, Aim::kMidpoint, M::kDrift,   kLensNormal,   7.0f,  0.06f, 0.00f };
 			case ShotType::kProfile:            return { true,  0.30f, 90.0f,   2.0f, false, A::kMidpoint, Aim::kMidpoint, M::kLocked,  kLensLong,     0.00f, 0.08f, 0.00f };
 
-			// ---- Neutral: the room ---------------------------------------------
+			// ---- Neutral: the room -------------------------------------------------
 			//
-			// Anchored to the SCENE. These do not hook to anybody's head: they take
-			// the direction the room actually opens in, stand off in it, and let
-			// the two participants fall where they fall in the frame. Negative
-			// headroom is what puts them in the lower third with the space above
-			// them, which is the difference between a shot of a room with a
-			// conversation in it and a badly framed two-shot.
-			// angleDeg here is degrees off the OPEN direction, not off the eyeline —
-			// see the scene branch in Solve. Spreading them means three room shots
-			// look at the same conversation from three corners instead of all
-			// stacking up along the one open axis.
+			// Anchored to the scene: these stand off in the direction the room opens up
+			// and let the two people fall where they fall. Negative headroom puts them in
+			// the lower third with space above.
+			//
+			// angleDeg here is relative to the open direction, not the eyeline (see the
+			// scene branch in Solve), so the room shots look at the conversation from
+			// different corners.
 			case ShotType::kWide:               return { true,  0.11f,   0.0f,  24.0f, false, A::kScene, Aim::kScene, M::kPullOut,  kLensWide,     0.14f, -0.24f, 0.10f };
 			case ShotType::kMaster:             return { true,  0.075f, 24.0f,  76.0f, false, A::kScene, Aim::kScene, M::kCraneUp,  kLensVeryWide, 46.0f, -0.30f, 0.14f };
 			case ShotType::kGroundLevel:        return { true,  0.24f,  -20.0f, -46.0f, false, A::kScene, Aim::kMidpoint, M::kTiltUp, kLensVeryWide, 24.0f, -0.12f, 0.00f };
 
-			// The long lens across the room, and the sharpest contrast in the
-			// table: kMaster and kDistant are both wide framings of the same two
-			// people, and they look nothing alike. One opens the space up, this
-			// one crushes it flat and reads as watching from a distance.
+			// The long lens across the room. Compared with kMaster, which opens the space
+			// up, this one flattens it and reads as watching from a distance.
 			case ShotType::kDistant:            return { true,  0.09f,   0.0f,  28.0f, false, A::kScene, Aim::kMidpoint, M::kLocked, kLensTele,     0.00f, -0.08f, 0.00f };
 			case ShotType::kDistantLow:         return { true,  0.10f,  32.0f, -24.0f, false, A::kScene, Aim::kMidpoint, M::kDrift,  kLensLong,     6.0f,  -0.06f, 0.00f };
 
@@ -257,25 +184,20 @@ namespace SD::Camera
 			return { a_v.x * c - a_v.y * s, a_v.x * s + a_v.y * c, a_v.z };
 		}
 
-		// Distance at which a a_extent-tall subject fills a_fill of the frame height.
-		//
-		// This is the whole correction. Skyrim reports a horizontal field of view,
-		// so the vertical has to be derived through the aspect ratio before it can
-		// say anything about how tall something appears.
-		// The subject's own size, not a constant.
-		//
-		// kSubjectExtent and kMinSubjectDistance are now the HUMANOID values, kept
-		// only as the defaults inside Anatomy. Passing the body in is what makes a
-		// close-up on a dragon frame its head rather than a nostril: fill is a
-		// fraction of the thing, and the thing is not always 42 units across.
+		// The head's share of a subject's extent; the extreme close-ups are sized
+		// against it. 0.55 of a person's 42 units is about 23, crown to just under the
+		// chin.
+		constexpr float kHeadShare = 0.55f;
+
+		// Distance at which a subject of the given extent fills a_fill of the frame
+		// height. Skyrim's FOV is horizontal, so the vertical is derived through the
+		// aspect ratio. Uses the subject's own size so a close-up on a dragon frames
+		// its head, not a nostril.
 		[[nodiscard]] float DistanceForFill(float a_fill, float a_fovDegrees, float a_aspect,
 			const Anatomy& a_body)
 		{
-			// kMinLens..kMaxLens, the same pair Solve clamps to — see the note on
-			// them. If this one were tighter the standoff would be solved for one
-			// field of view and the frame rendered at another, and the subject
-			// would come out larger than the fill asked for, which for the tightest
-			// setup means straight through the distance floor.
+			// Same lens limits Solve clamps to. If these differed, the standoff would be
+			// solved for one FOV and rendered at another.
 			const float horizontal = std::clamp(a_fovDegrees,
 									 static_cast<float>(kMinLens),
 									 static_cast<float>(kMaxLens)) * kDeg;
@@ -288,14 +210,9 @@ namespace SD::Camera
 			if (!(t > 1.0e-4f)) {
 				return 200.0f;
 			}
-			// The ceiling is deliberately far past anything an interior can use.
-			// A long lens on a small fill legitimately asks for well over a
-			// thousand units, and the old 900 quietly refused it — so the widest,
-			// longest setups in the table all solved to the same clamped distance
-			// and arrived looking like each other.
-			// The ceiling scales too. A dragon framed at a wide fill legitimately
-			// asks for further away than any human shot ever does, and the old flat
-			// 2400 would clamp exactly the setups that need the room most.
+			// The ceiling is well past anything an interior can use, and scales with the
+			// subject: long lenses on small fills legitimately want over a thousand units,
+			// more for a dragon.
 			return std::clamp((a_body.extent * 0.5f) / t,
 				a_body.minDistance, 2400.0f * std::max(a_body.scale, 1.0f));
 		}
@@ -306,32 +223,10 @@ namespace SD::Camera
 			return 1.0f - (1.0f - t) * (1.0f - t);
 		}
 
-		// WHAT USED TO BE HERE: kMoveReference / dollyFraction, the one global
-		// movement dial, referenced against a shipped 0.17.
-		//
-		// It scaled forty-three shots' moves together, which is the same mistake
-		// the global lens shift was: one number adjusting every setup flattens the
-		// difference between them. Amount is per setup now, on a 0-100 scale that
-		// means the same thing for every move, and so is duration.
-
-		// Shifts every shot's lens by a fixed number of degrees. The one dial that
-		// changes the whole look of a conversation without touching a single
-		// framing: run the same coverage on longer glass and it reads as observed
-		// and composed, run it wider and it reads as involved and close.
-
-		// Which setups the picker may draw. Every shot ships on; the player turns
-		// off the ones they do not want to see.
-		// How often a shot is drawn relative to its neighbours, 0-100.
-		//
-		// Separate from `enabled` rather than folded into it as "weight 0 is off",
-		// so that switching a setup off and back on returns it to the frequency it
-		// had rather than silently rewriting it. Weight 0 and disabled do now mean
-		// the same thing at every draw site — see the note on Enabled — but they
-		// remain two settings because they are two intentions.
-		//
-		// Seeded per shot rather than filled flat. The baseline that used to live
-		// in the pools as duplicate entries lives here now; AuthoredWeight says
-		// which setups carry it and why.
+		// Which setups the picker may draw, and how often each is drawn relative to
+		// the others (0-100). Kept separate from `enabled` so switching a setup off
+		// and on again keeps its weight. Weight 0 and disabled behave the same at
+		// every draw site. Per-shot defaults come from AuthoredWeight.
 		struct SelectionSettings
 		{
 			std::array<std::atomic<bool>, static_cast<std::size_t>(ShotType::kCount)> enabled{};
@@ -346,19 +241,11 @@ namespace SD::Camera
 				}
 			}
 		};
-		// The settings panel and camera hooks can access these concurrently.
+		// Read by the settings panel and the camera hooks concurrently.
 		SelectionSettings selectionSettings{};
 
-		// The live field of view for each setup, in degrees. A TRUE value, seeded
-		// from the table.
-		//
-		// This used to be an override with 0 meaning "keep what the table
-		// authored", and the sentinel was the problem: the authored lens differs
-		// per setup — 88 on the wides, 50 on the portraits, 40 on the extreme
-		// close — so a slider sitting at 0 told you nothing about what the shot was
-		// actually shooting at, and two setups reading 0 were shooting 38 degrees
-		// apart. Seeding each entry with its own authored value makes the number on
-		// screen the number in use.
+		// The live field of view for each setup, in degrees, seeded from the table so
+		// the slider shows the lens actually in use.
 		std::array<std::uint8_t, static_cast<std::size_t>(ShotType::kCount)> lensDegrees = [] {
 			std::array<std::uint8_t, static_cast<std::size_t>(ShotType::kCount)> out{};
 			for (std::size_t i = 0; i < out.size(); ++i) {
@@ -367,21 +254,11 @@ namespace SD::Camera
 			return out;
 		}();
 
-		// WHAT 100 ON THE AMOUNT SLIDER MEANS, per move.
-		//
-		// The table authored each amount in whatever unit its move needed: a
-		// fraction of the standoff for a push, a fraction of the lens for a zoom,
-		// world units for a crane or tilt, degrees for a drift. That is fine for a
-		// table and useless for a control — the same "14" was a seventh of the
-		// standoff on one setup and a seventh of a degree of arc on another.
-		//
-		// So the slider is a percentage of the full travel of whichever move is
-		// selected, and these are the full travels. Now 60 means the same amount of
-		// movement whatever the shot is doing, and switching a setup from a push to
-		// an orbit keeps its intensity instead of jumping.
-		//
-		// The world-unit entries are multiplied by the subject's scale at solve
-		// time, so a crane on a dragon rises in proportion to the dragon.
+		// What 100 on the amount slider means for each move. The table's amounts use
+		// the move's own units, so the slider is a percentage of each move's full
+		// travel instead; 60 means the same amount of movement whatever the move, and
+		// switching moves keeps the intensity. World-unit entries are scaled by the
+		// subject's size at solve time.
 		[[nodiscard]] constexpr float FullScale(Move a_move)
 		{
 			switch (a_move) {
@@ -403,24 +280,22 @@ namespace SD::Camera
 			}
 		}
 
-		// The table's own amount, expressed on the 0-100 slider. This is what the
-		// per-shot Default button restores to, and what a fresh install starts at,
-		// so the authored rhythm survives the move becoming a setting.
+		// The table's own amount on the 0-100 scale. What a fresh install starts at
+		// and what the per-shot Default button restores.
 		[[nodiscard]] constexpr int AuthoredStrength(ShotType a_type)
 		{
 			const auto  spec = SpecFor(a_type);
 			const float full = FullScale(spec.move);
 			if (!(full > 0.0f)) {
-				// A locked setup has no authored amount to convert. It still needs a
-				// sensible number sitting under the slider for the moment somebody
-				// switches it to a move that does something.
+				// A locked setup has no amount to convert; give the slider a sensible value
+				// for when someone switches it to a move.
 				return 35;
 			}
 			const float pct = (spec.moveAmount / full) * 100.0f;
 			return static_cast<int>(pct < 0.0f ? 0.0f : (pct > 100.0f ? 100.0f : pct));
 		}
 
-		// How long a move takes, in hundredths of a second. The old global default.
+		// Default move duration, in hundredths of a second.
 		constexpr int kDefaultMoveTime = 420;
 
 		std::array<std::uint8_t, static_cast<std::size_t>(ShotType::kCount)> moveChoice = [] {
@@ -445,52 +320,29 @@ namespace SD::Camera
 			return out;
 		}();
 
-		// WHICH LIGHTING RIG EACH SETUP IS SHOT UNDER, as an index into
-		// Scene::AllRigs.
-		//
-		// Stored as an index and written to the ini as a NAME, which is the same
-		// split the presets use and for the same reason: an ordinal in a settings
-		// file points at whatever now sits at that position, so adding a rig in the
-		// middle of the table would silently relight every setup below it.
-		//
-		// -1 means "nothing has resolved this yet". It is not a legal value to
-		// light with — Director fills the array from the ini before the first cut —
-		// but it has to be distinguishable from rig 0, which is a real rig that
-		// happens to be Off. A setup that never got read must fall back to what it
-		// ships as, not to darkness.
+		// Lighting rig per setup, as an index into Scene::AllRigs. Stored in the ini
+		// as a name so adding a rig doesn't shift every setup after it. -1 means not
+		// resolved yet (rig 0 is a real rig, Off), so an unread setup falls back to
+		// its shipped rig, not to darkness.
 		std::array<std::int8_t, static_cast<std::size_t>(ShotType::kCount)> lightRig = [] {
 			std::array<std::int8_t, static_cast<std::size_t>(ShotType::kCount)> out{};
 			out.fill(static_cast<std::int8_t>(-1));
 			return out;
 		}();
 
-		// This setup's own light nudge, in camera space. Zero is the common case by
-		// a wide margin, so these are only ever written by somebody who has gone
-		// looking for them.
+		// Per-setup light nudge in camera space. Usually zero.
 		std::array<std::int16_t, static_cast<std::size_t>(ShotType::kCount)> lightOffX{};
 		std::array<std::int16_t, static_cast<std::size_t>(ShotType::kCount)> lightOffY{};
 		std::array<std::int16_t, static_cast<std::size_t>(ShotType::kCount)> lightOffZ{};
 
-		// How much room exists in one direction, measured from the subject.
+		// How much room there is in one direction, measured outward from the subject
+		// (a ray that starts inside a wall reports no hit, so an inward test would
+		// pass a buried camera). The probe starts outside the subject's own collision,
+		// scaled by Anatomy; a fixed human-sized start makes every direction look
+		// blocked for a dragon.
 		//
-		// Cast outward from the subject rather than inward from the camera: a ray
-		// beginning inside a wall usually reports no hit at all, so a camera buried
-		// in masonry passes an inward test cleanly.
-		// THE PROBE START IS THE ONE THAT BREAKS CREATURES OUTRIGHT.
-		//
-		// kProbeStart exists because a ray cast from inside an actor's own
-		// collision hits them immediately and reports no room in any direction. 48
-		// units clears a person. It does not clear a dragon by any margin at all —
-		// so every direction came back blocked, every composed shot failed, and the
-		// emergency single ran the entire conversation. That is not a framing
-		// nicety; it is the difference between the mod working and not.
-		// What one direction offers: how far the camera may stand, and how much of
-		// the shot's width was actually unobstructed getting there.
-		//
-		// `clear` used to be thrown away because there was nothing to spend it on.
-		// It is what tells a wide shot with a market stall across a third of the
-		// frame from the identical wide shot with nothing in it — two placements
-		// that were, until the score existed, the same answer.
+		// `clear` is how much of the shot's width was unobstructed, which separates a
+		// wide shot with a stall across a third of the frame from a clean one.
 		struct Room
 		{
 			float distance{ 0.0f };
@@ -515,10 +367,8 @@ namespace SD::Camera
 				a_subject.z + a_direction.z * a_wanted + a_rise
 			};
 
-			// Wide at the subject, narrow at the camera. The near spread is half the
-			// subject's own extent, so the cone contains their silhouette and
-			// anything crossing it is crossing frame; the far spread is the camera's
-			// own body, which is what decides whether there is room to stand.
+			// Wide at the subject, narrow at the camera: the near spread covers the
+			// subject's silhouette, the far spread is the camera's own size.
 			const float nearSpread = std::max(a_extent * 0.5f, 12.0f);
 			const auto  probe = CastBundle(from, to, nearSpread, kCameraRadius);
 
@@ -529,10 +379,7 @@ namespace SD::Camera
 				return { a_wanted, 1.0f };
 			}
 
-			// The margin scales with the subject for the same reason `rise` does:
-			// it is in world units, and every other absolute number in this file
-			// was already made per-subject when creatures arrived. A dragon's
-			// camera stopping four inches off a wall is four inches at ITS scale.
+			// The margin scales with the subject, like every other world-unit value.
 			const float margin = kWallMargin * std::max(a_extent / 42.0f, 1.0f);
 			return {
 				std::max(a_probeStart + probe.distance - margin, 0.0f),
@@ -540,10 +387,9 @@ namespace SD::Camera
 			};
 		}
 
-		// A placement proposal on the centre sightline only. A side ray through
-		// harmless foreground must not shorten a protected shot. This deliberately
-		// does not certify visibility: final face samples and the local lens volume
-		// still decide whether the composed camera can be used.
+		// Placement proposal on the center sightline only, so a side ray through
+		// harmless foreground can't shorten a protected shot. This doesn't certify
+		// visibility; the face samples and lens volume still decide that.
 		[[nodiscard]] Room NarrowRoom(const RE::NiPoint3& a_subject, const RE::NiPoint3& a_direction,
 			float a_rise, float a_wanted, float a_probeStart, float a_extent)
 		{
@@ -570,19 +416,10 @@ namespace SD::Camera
 			return { std::max(a_probeStart + (a_wanted - a_probeStart) * fraction - margin, 0.0f), 0.0f };
 		}
 
-		// The room along a bearing: measured, or remembered from the cut.
-		//
-		// EVERY RoomAlong CALL ON A SOLVE PATH GOES THROUGH HERE, and that is the
-		// only thing keeping the setting honest. A path that probed directly would
-		// still correct the camera mid-shot, and it would do it on one axis while
-		// the others held — which reads worse than either behaviour on its own.
-		//
-		// The remembered `clear` is 1.0f rather than what was measured. Clear feeds
-		// Score, Score feeds Pose::quality, and quality is read by exactly one
-		// caller — Placement, judging candidates at a cut, where holdPlacement is
-		// false by construction. A held frame's quality is therefore never read,
-		// and carrying a second field to make an unread number accurate would be
-		// paying for a fiction.
+		// The room along a bearing: measured, or remembered from the cut. Every
+		// RoomAlong call on a solve path goes through here, so Hold Placement holds
+		// every axis at once. The remembered `clear` is 1.0: it only feeds quality,
+		// which is only read at a cut, where holdPlacement is always false.
 		[[nodiscard]] Room RoomHere(const Subjects& a_subjects, const RE::NiPoint3& a_subject,
 			const RE::NiPoint3& a_direction, float a_rise, float a_wanted, float a_probeStart,
 			float a_extent)
@@ -595,17 +432,9 @@ namespace SD::Camera
 			return RoomAlong(a_subject, a_direction, a_rise, a_wanted, a_probeStart, a_extent);
 		}
 
-		// What Pose::room should report. See kOpenRoom for why an unobstructed
-		// bearing is not reported as its own distance.
-		//
-		// A HELD FRAME REPORTS THE HELD VALUE, not what RoomHere just handed back.
-		// The two differ, and only in the case that would matter: RoomHere answers
-		// a held kOpenRoom with the distance the shot asked for THIS frame, which
-		// is right for solving the standoff and wrong for remembering, because a
-		// move that has pulled out since the cut would turn "nothing is in the way"
-		// into a cap at wherever it had got to. Reporting the held value keeps
-		// Pose::room true on every frame rather than only on the one the director
-		// happens to read.
+		// What Pose::room should report. A held frame reports the held value rather
+		// than what RoomHere returned this frame, so a pull-out move doesn't turn
+		// "nothing in the way" into a cap at wherever the move had reached.
 		[[nodiscard]] float RememberRoom(const Subjects& a_subjects, float a_room, float a_clear)
 		{
 			if (a_subjects.holdPlacement && a_subjects.heldRoom > kUnheld) {
@@ -614,13 +443,9 @@ namespace SD::Camera
 			return a_clear >= 1.0f ? kOpenRoom : a_room;
 		}
 
-		// Where the subject lands in frame, once the camera is placed.
-		//
-		// Returns the aim point, which is NOT the subject: to put a face in the
-		// upper third the camera has to point below it. Everything in the mod used
-		// to aim dead at a head, so every setup — all forty-odd of them — put its
-		// subject in the exact centre of the screen. That is a large part of why
-		// they read as one shot.
+		// Where the subject lands in frame once the camera is placed. Returns the aim
+		// point, which isn't the subject: to put a face on the upper third the camera
+		// has to point below it.
 		[[nodiscard]] RE::NiPoint3 Compose(const RE::NiPoint3& a_position, const RE::NiPoint3& a_target,
 			const RE::NiPoint3& a_facing, float a_lensDeg, float a_aspect, float a_headroom, float a_lookRoom)
 		{
@@ -648,10 +473,8 @@ namespace SD::Camera
 			const float halfWidth = distance * std::tan(horizontal * 0.5f);
 			const float halfHeight = distance * std::tan(vertical * 0.5f);
 
-			// Which way the subject is looking, in screen terms. Derived rather
-			// than passed in as a sign, because the camera legally stands on either
-			// side of the eyeline — hardcoding it would put the look-room BEHIND
-			// the subject's head every time the 180-degree rule flipped.
+			// Which way the subject faces in screen terms. Derived rather than passed in,
+			// since the camera can be on either side of the eyeline.
 			const float facing = right.x * a_facing.x + right.y * a_facing.y + right.z * a_facing.z;
 			const float lookSign = facing > 0.0f ? -1.0f : 1.0f;
 
@@ -665,22 +488,15 @@ namespace SD::Camera
 			};
 		}
 
-		// HOW GOOD A PLACEMENT IS, 0..1, from the three ways it can be a compromise.
+		// Placement quality, 0..1, from three kinds of compromise:
 		//
-		// size   — it had to stand closer than the framing asked for, so the subject
-		//          is bigger than the shot intended. This is the one that changes
-		//          what the shot IS: a close-up that had to come in another third is
-		//          an extreme close-up nobody chose. Weighted highest.
-		// clear  — the view down the chosen bearing is partly blocked, by geometry
-		//          or by somebody standing in it.
-		// angle  — it had to step away from its own authored bearing to find room.
-		//          Limited to twelve degrees; larger changes must use another
-		//          enabled shot rather than relabel a different composition.
+		// size   - had to stand closer than the framing asked, so the subject is
+		//          bigger than intended. Weighted highest: it changes what the shot is.
+		// clear  - the view along the bearing is partly blocked.
+		// angle  - had to step away from its own bearing to find room. Limited to
+		//          twelve degrees; beyond that another enabled shot should be used.
 		//
-		// Multiplied by nothing and floored at nothing. A refused shot never reaches
-		// here — `valid` stays false and quality stays zero — so every number this
-		// returns describes a placement that genuinely works, and the caller is
-		// choosing between working shots rather than filtering broken ones.
+		// Refused shots never get here, so this only compares shots that work.
 		[[nodiscard]] float Score(float a_wanted, float a_used, float a_clear, float a_offset)
 		{
 			const float size = a_wanted > 1.0f ?
@@ -691,43 +507,22 @@ namespace SD::Camera
 			return std::clamp(0.45f * size + 0.32f * clear + 0.23f * angle, 0.0f, 1.0f);
 		}
 
-		// WHAT IS ACTUALLY VISIBLE FROM THE FINISHED POSE, 0..1.
+		// What's actually visible from the finished pose, 0..1. The room checks above
+		// reason about a bearing, which covers a plain single, but not:
 		//
-		// Everything above this point reasons about a BEARING — how much room there
-		// is along a direction out from the subject. That covers the sightline for
-		// a plain single by coincidence, because the camera ends up on that exact
-		// line. Three things break the coincidence, and none of them were checked:
+		//   - a slide, which moves the camera sideways after the bearing was probed;
+		//   - an over-the-shoulder, which needs the foreground shoulder visible;
+		//   - a two-shot, which needs both people.
 		//
-		//   A SLIDE moves the camera sideways after the bearing was probed, and is
-		//   the one move that does not re-aim at the subject afterwards. The shot
-		//   was validated at a position the camera no longer occupies.
-		//
-		//   AN OVER-THE-SHOULDER is only an over-the-shoulder if the shoulder is in
-		//   frame, and the shoulder belongs to the person the shot is NOT about.
-		//   Nothing has ever asked whether that body is visible; a beam across it
-		//   turns the setup into a slightly off-centre close-up for no reason the
-		//   player can see.
-		//
-		//   A TWO-SHOT needs both people. Same test, same omission.
-		//
-		// Cast FROM the person TOWARD the camera in every case. The inward
-		// direction is unreliable — a ray beginning inside a wall reports no hit,
-		// so a camera buried in masonry passes cleanly.
-		//
-		// Penalties multiply rather than veto. A shot that has lost its foreground
-		// body is a worse shot, not an impossible one, and in a room where it is
-		// the best available it should still be reachable.
+		// Rays go from each person toward the camera (outward, for the same reason as
+		// RoomAlong). Penalties multiply rather than veto: a shot that lost its
+		// foreground body is worse, not impossible.
 		[[nodiscard]] float Visibility(const Pose& a_pose, const RE::NiPoint3& a_subject,
 			const RE::NiPoint3& a_other, const ShotSpec& a_spec, float a_truck,
 			const Subjects& a_subjects)
 		{
-			// A held shot does not ask, and the reason is the same one RoomHere
-			// gives: this is three raycasts and a walk of every actor in the cell,
-			// spent entirely on Pose::quality, which no caller reads on a frame
-			// where holdPlacement is set. Left running it would also be the last
-			// per-frame probe standing — the camera would hold its distance and
-			// still be scored against a guard walking past, which is work done to
-			// reach a number that is thrown away.
+			// Skipped on held frames, like RoomHere: it's several raycasts and an actor
+			// walk that only feed quality, which nothing reads while holding.
 			if (a_subjects.holdPlacement) {
 				return 1.0f;
 			}
@@ -745,10 +540,8 @@ namespace SD::Camera
 			}
 
 			if (a_subjects.avoidCrowds) {
-				// Reach is the width of the shot near the lens, which is what
-				// decides how much of the frame a body standing there takes. A
-				// person at arm's length from the camera fills it; the same person
-				// beside the subject is a detail in the background.
+				// Width of the shot near the lens. A person at arm's length from the camera
+				// fills the frame; the same person beside the subject is background.
 				constexpr float kCrowdReach = 70.0f;
 				const float     crowd = Crowding(a_subject, a_pose.position,
 						a_subjects.npcId, a_subjects.playerId, kCrowdReach);
@@ -758,36 +551,17 @@ namespace SD::Camera
 			return std::clamp(sight, 0.0f, 1.0f);
 		}
 
-		// How fast the camera is allowed to move back OUT, in units per second.
-		//
-		// RoomAlong is a single ray, which is a knife edge: a railing, a chair back
-		// or a passing NPC's drawn weapon flips it fully on and off rather than
-		// degrading. Wired straight into position, that reads as the camera zooming
-		// in and out as things pass — the reported spazzing, and it is a pop rather
-		// than a move because ApplyPose writes the result to the node with no
-		// smoothing of any kind.
-		//
-		// ASYMMETRIC, AND THE ASYMMETRY IS THE WHOLE POINT. Pulling IN is never
-		// limited: this load order runs No Camera Collision, so RoomAlong is the
-		// only thing keeping the lens out of masonry and a rate limit on the way in
-		// would let the camera sit inside a wall for the duration of the ramp.
-		// Coming back out has no such urgency, so it is paced and the transient
-		// becomes a shallow dip instead of a snap.
-		//
-		// Well clear of the dolly, which is the other thing that legitimately moves
-		// the standoff: iDollyAmount=26 over iDollyWindow=420 is 26% of the standoff
-		// across 4.2s, under 20 u/s on a typical shot. A limit that fought the dolly
-		// would flatten the one move the shots actually author.
+		// How fast the camera may move back out, in units per second. RoomAlong is a
+		// single ray, so a railing or someone walking past flips it on and off; this
+		// turns that into a shallow dip instead of a pop. Pulling in is never limited,
+		// since nothing else keeps the lens out of walls (this load order runs No
+		// Camera Collision). Well above the speed of the authored dolly moves.
 		constexpr float kStandoffRecovery = 300.0f;
 
-		// Slides the whole camera sideways without turning it.
-		//
-		// Position AND aim move by the same vector, and that is the entire
-		// difference between a slide and an orbit: the camera keeps looking in
-		// exactly the direction it already was, so the subject drifts across frame
-		// and eventually out of it. Every other move here ends with the aim
-		// recomposed onto the subject; this one must not, which is why it is
-		// applied out here after composition rather than in the move switch.
+		// Slides the whole camera sideways without turning it. Position and aim move
+		// by the same vector, so the subject drifts across frame; that's the
+		// difference from an orbit. Applied after composition because every other move
+		// re-aims at the subject.
 		void ApplyTruck(Pose& a_pose, float a_units)
 		{
 			if (a_units == 0.0f) {
@@ -819,7 +593,7 @@ namespace SD::Camera
 		}
 
 		// The first frame of a shot is unheld, so a cut lands at its true distance
-		// immediately. A cut is supposed to be instant; only the correction is not.
+		// immediately; only the correction is rate-limited.
 		[[nodiscard]] float LimitStandoff(const Subjects& a_subjects, float a_wanted)
 		{
 			if (a_subjects.heldStandoff <= kUnheld || !(a_subjects.delta > 0.0f)) {
@@ -832,48 +606,22 @@ namespace SD::Camera
 		}
 	}
 
-	// Display names, and they are display names only — Key() below is the settings
-	// contract and none of this touches it.
+	// Display names only; Key() below is the settings contract.
 	//
-	// WRITTEN FOR SOMEBODY WHO HAS NEVER BEEN ON A FILM SET. Every name here says
-	// what will be on screen; none of them says what the technique is called. The
-	// trade names went one at a time and each for a reason a player could feel:
+	// Names describe what's on screen rather than film terminology ("Head And
+	// Shoulders" rather than "Medium", "Both Of You" rather than "Two-Shot").
+	// Shoulder shots are named by whose shoulder it is: "Over Your Shoulder" is a
+	// shot of them, with the camera behind you.
 	//
-	//   Dirty Single       -> Over The Shoulder (Tight). It IS an over-the-
-	//                         shoulder, just close enough that only an edge of
-	//                         the other person is left. "Dirty" says nothing at
-	//                         all unless you already know, and it sat alone
-	//                         instead of joining the family it belongs to.
-	//   Medium             -> Head And Shoulders. Medium what? The old name is
-	//                         only meaningful against the sizes either side of
-	//                         it, which are not on screen next to it.
-	//   Low Angle          -> From Below, and High Angle -> From Above. Same
-	//                         image, no vocabulary.
-	//   Long               -> Full Figure. "Long" describes the lens to a crew
-	//                         and the framing to nobody else.
-	//   Profile            -> Side On.
-	//   Master / Ground    -> The Whole Room / From The Floor.
-	//   Two-Shot           -> Both Of You. The brief for this pass named it as
-	//                         the example of a word to assume nobody knows.
-	//
-	// THE SHOULDER SHOTS ARE NAMED BY WHOSE SHOULDER IT IS, which is what makes
-	// the two halves of the exchange tellable apart at all. "Over Your Shoulder"
-	// is a shot OF THEM; the camera is behind you. That was the single most
-	// confusable pair in the old set — the label said "Over The Shoulder" on both
-	// sides of the eyeline and only the panel heading disambiguated.
-	//
-	// SEVEN NAMES ARE STILL DELIBERATELY DUPLICATED across the two sides: Close
-	// Up, Extreme Close Up, Head And Shoulders, Three Quarters, From Below, Full
-	// Figure and From High Above. Leave them alone. Those pairs are the SAME
-	// framing on opposite sides of the eyeline — that is what a reverse shot is,
-	// and matching names are how the Shots page shows that the pair go together.
-	// The panel headings say which side you are reading, and the log prints
-	// SubjectName beside the name, so neither surface is actually ambiguous.
+	// Seven names repeat across the two sides on purpose (Close Up, Extreme Close
+	// Up, Head And Shoulders, Three Quarters, From Below, Full Figure, From High
+	// Above): they're the same framing from opposite sides of the eyeline. The
+	// panel headings and SubjectName() in the log tell them apart.
 	std::string_view Name(ShotType a_type) noexcept
 	{
 		switch (a_type) {
-		// Shots of the NPC. The camera is behind the PLAYER for the shoulder
-		// four, which is why they carry the player's pronoun.
+		// Shots of the NPC. For the shoulder shots the camera is behind the player,
+		// hence "your".
 		case ShotType::kOverPlayerShoulder:     return "Over Your Shoulder"sv;
 		case ShotType::kOverPlayerShoulderLow:  return "Over Your Shoulder (Low)"sv;
 		case ShotType::kOverPlayerShoulderHigh: return "Over Your Shoulder (High)"sv;
@@ -909,10 +657,7 @@ namespace SD::Camera
 		case ShotType::kLongPlayer:         return "Full Figure"sv;
 		case ShotType::kPlayerOverhead:     return "From High Above"sv;
 
-		// Shots of the pair, and of the room. "Profile" used to appear here AND
-		// on the player's list for two entirely different shots — one of a person
-		// and one of both of them — which is the one duplicate that was never
-		// defensible.
+		// Shots of the pair and of the room.
 		case ShotType::kTwoShot:            return "Both Of You"sv;
 		case ShotType::kProfile:            return "Both Of You (Side On)"sv;
 		case ShotType::kWide:               return "Wide"sv;
@@ -924,21 +669,8 @@ namespace SD::Camera
 		}
 	}
 
-	// WHAT USED TO BE HERE: Description(), one plain line per setup saying what
-	// would be on screen — "Their face fills most of the frame."
-	//
-	// Written for a Shots page whose rows opened onto an explanation, and removed
-	// with that explanation. Nothing displays it now: a look is chosen on the
-	// Presets page in one tick, and the Shots page is a list of names for
-	// switching angles on and off. Names carry it, which is why they were made
-	// plain in the same pass.
-
-	// Who the shot is of, in one word.
-	//
-	// Exists because Name() is now written for a menu where a heading already
-	// says which side of the exchange you are looking at. The log has no such
-	// heading, and "Close-up -> Close-up" would be a real cut between two
-	// different angles that reads as no cut at all.
+	// Who the shot is of, in one word. For the log, which has no panel heading to
+	// tell "Close Up" on one side from "Close Up" on the other.
 	std::string_view SubjectName(ShotType a_type) noexcept
 	{
 		if (IsNeutral(a_type)) {
@@ -947,8 +679,8 @@ namespace SD::Camera
 		return FavoursNpc(a_type) ? "them"sv : "you"sv;
 	}
 
-	// Never rename one of these. They are keys in the player's settings file, and
-	// a rename silently re-enables whatever the player turned off.
+	// Never rename these. They're keys in the player's settings file, and a rename
+	// silently re-enables whatever the player turned off.
 	const char* Key(ShotType a_type) noexcept
 	{
 		switch (a_type) {
@@ -997,16 +729,9 @@ namespace SD::Camera
 
 	namespace
 	{
-		// Derived from Key() rather than more switches of forty-three literals.
-		// Several hand-maintained tables of the same names are one rename away from
-		// a setting that saves to one key and loads from another.
-		// THE PREFIX IS A PARAMETER because one key in this family is not an
+		// Derived from Key() so there's only one hand-maintained list of names. The
+		// prefix is a parameter because the lighting rig is stored as a string, not an
 		// integer.
-		//
-		// Everything a setup stores has been a number until now, so the "i" was
-		// baked in. The lighting rig is a NAME — see lightRig above for why an
-		// ordinal could not carry it — and an ini whose string values are spelled
-		// with an integer prefix is a small lie that costs nothing to avoid.
 		const char* TypedKey(ShotType a_type, const char* a_prefix, const char* a_suffix,
 			std::array<std::string, static_cast<std::size_t>(ShotType::kCount)>& a_cache)
 		{
@@ -1059,7 +784,7 @@ namespace SD::Camera
 		return SuffixedKey(a_type, "MoveTime", cache);
 	}
 
-	// Read once, to migrate. See the note on SetMove.
+	// Read once, to migrate. See SetMove.
 	const char* ZoomKey(ShotType a_type) noexcept
 	{
 		static std::array<std::string, static_cast<std::size_t>(ShotType::kCount)> cache;
@@ -1092,33 +817,14 @@ namespace SD::Camera
 
 	const char* AuthoredLight(ShotType a_type) noexcept
 	{
-		// HOW THESE WERE CHOSEN, because "which rig suits a close-up" is not a
-		// question with an obvious answer and the table below is otherwise just
-		// thirty-nine assertions.
-		//
-		// ONE PRINCIPLE DOES MOST OF THE WORK: a face-modelling rig is only worth
-		// running on a shot where the face is big enough to be modelled. A key
-		// aimed at a head from across a room lights a speck and spills over
-		// everything between, so the wides and the masters ship on Natural or on
-		// nothing at all. This is the same shape as the lens table — the setups
-		// differ most where the subject is largest — and it is why the room shots
-		// look untouched, which is correct: the room was already lit by the people
-		// who built it.
-		//
-		// THE SECOND PRINCIPLE IS THAT ANGLE AND RIG SHOULD AGREE. A profile is
-		// already a shot about the shape of a head, so it gets Rembrandt, which is
-		// about exactly that. A low angle is already a shot about somebody having
-		// the advantage, so it gets Hard. The extreme closes get Hard on both sides
-		// because they are gated to intensity-100 lines and there is no such thing
-		// as a gentle one.
-		//
-		// Every one of these is a default. The point of the per-setup key is that
-		// none of it has to be agreed with.
+		// Default rig per setup. Two rules: a face-modelling rig is only worth it when
+		// the face is big in frame (the wides and masters use Natural or nothing,
+		// since a key from across the room just lights a patch of floor), and the rig
+		// should suit the angle (Rembrandt on profiles, Hard on low angles and on the
+		// extreme close-ups, which only appear on intensity-100 lines). All of these
+		// are just defaults.
 		switch (a_type) {
-		// The tightest and the lowest. Both are angles about somebody having the
-		// advantage, and Hard is the look about the same thing. The extremes are
-		// gated to intensity-100 lines anyway, and there is no gentle version of
-		// one of those.
+		// The tightest and the lowest angles get Hard.
 		case ShotType::kExtremeClose:
 		case ShotType::kExtremeClosePlayer:
 		case ShotType::kCloseLow:
@@ -1127,8 +833,7 @@ namespace SD::Camera
 		case ShotType::kPlayerLow:
 			return "hard";
 
-		// The close range, where a face is large enough for a fill to be worth
-		// having.
+		// The close range, where a face is big enough for fill light to matter.
 		case ShotType::kCloseUp:
 		case ShotType::kClosePlayer:
 		case ShotType::kCloseHigh:
@@ -1139,8 +844,8 @@ namespace SD::Camera
 		case ShotType::kDirtyPlayer:
 			return "soft";
 
-		// The room, and the shots that are mostly room. Nothing here is a portrait
-		// and a key on any of them is a bright patch on a floor.
+		// The room and the mostly-room shots. A key on any of them is a bright patch
+		// on the floor.
 		case ShotType::kDistant:
 		case ShotType::kDistantLow:
 		case ShotType::kMaster:
@@ -1175,9 +880,8 @@ namespace SD::Camera
 
 	float LensOf(ShotType a_type) noexcept
 	{
-		// The LIVE lens, not the authored one. The cut log prints this, and a log
-		// reporting the table's value while the camera shot something else would be
-		// the least useful kind of wrong. AuthoredLens() is there for the original.
+		// The live lens, not the authored one, since the cut log prints this.
+		// AuthoredLens() returns the original.
 		return static_cast<float>(Shot::Lens(a_type));
 	}
 
@@ -1189,6 +893,13 @@ namespace SD::Camera
 	bool OverShoulder(ShotType a_type) noexcept
 	{
 		return SpecFor(a_type).overShoulder;
+	}
+
+	bool FollowsFace(ShotType a_type) noexcept
+	{
+		const auto spec = SpecFor(a_type);
+		return spec.anchor == Anchor::kSubject && spec.aim == Aim::kSubject &&
+			!spec.overShoulder && spec.fill >= 0.5f;
 	}
 
 	bool IsNeutral(ShotType a_type) noexcept
@@ -1262,15 +973,11 @@ namespace SD::Camera
 
 	int AuthoredWeight(ShotType a_type) noexcept
 	{
-		// The eight setups the pools used to list twice, and nothing else. Kept as
-		// its own switch rather than a thirteenth column on ShotSpec: that table is
-		// positional aggregate initialisation across thirty-nine cases, and adding
-		// a field to it to say "50" thirty-one times would be the most error-prone
-		// way available to express a two-value fact.
-		//
-		// These are the staples of filmed dialogue — the shoulder pair, the two
-		// mediums, the two dirty singles, the two three-quarters, and the close-up
-		// on the speaker. Everything else in the mod is an accent against them.
+		// The staple setups of filmed dialogue (the shoulder pair, the two mediums,
+		// the two tight over-the-shoulders, the three-quarters, and the close-up on
+		// the speaker). Everything else is an accent against these. A separate switch
+		// rather than another ShotSpec column, which would mean writing "50"
+		// thirty-one times.
 		switch (a_type) {
 		case ShotType::kCloseUp:
 		case ShotType::kMediumNpc:
@@ -1434,9 +1141,9 @@ namespace SD::Camera
 		a_pose.visibility = SubjectVisibility(a_pose.position, a_pose.lookAt, lens,
 			a_subjects.aspect, a_subjects.cropFractionPerEdge, subject, *context);
 
-		// A two-person or room setup must actually show both faces. The listener
-		// in an over-the-shoulder remains optional foreground: only covering the
-		// primary subject's protected samples can disqualify that composition.
+		// A two-person or room setup must show both faces. The listener in an
+		// over-the-shoulder is optional foreground: only covering the main subject's
+		// protected samples disqualifies it.
 		if (spec.anchor != Anchor::kSubject || spec.aim != Aim::kSubject) {
 			const auto& other = spec.onNpc ? a_subjects.playerSight : a_subjects.npcSight;
 			const auto sight = SubjectVisibility(a_pose.position, a_pose.lookAt, lens,
@@ -1461,8 +1168,8 @@ namespace SD::Camera
 		if (!Shot::Enabled(a_type) || Shot::Weight(a_type) <= 0) {
 			return pose;
 		}
-		// A carried placement cannot reintroduce a wide sweep through the held
-		// branch, which deliberately skips candidate generation.
+		// A carried placement can't reintroduce a wide sweep through the held branch,
+		// which skips candidate generation on purpose.
 		if (!std::isfinite(a_subjects.heldSweep) ||
 			(a_subjects.heldSweep > kUnheld && !ShotAngles::AllowedAdjustment(a_subjects.heldSweep))) {
 			return pose;
@@ -1472,12 +1179,9 @@ namespace SD::Camera
 		const RE::NiPoint3 subject = spec.onNpc ? a_subjects.npcHead : a_subjects.playerHead;
 		const RE::NiPoint3 other = spec.onNpc ? a_subjects.playerHead : a_subjects.npcHead;
 
-		// Whose measurements the framing uses.
-		//
-		// A subject-anchored setup takes its own subject's. A midpoint or scene
-		// setup frames both parties, so it takes the LARGER of the two — a
-		// two-shot of a person and a dragon composed against the person is a
-		// two-shot of a person and a shin.
+		// Whose measurements the framing uses: the subject's for subject-anchored
+		// setups, the larger of the two for midpoint and scene setups (otherwise a
+		// two-shot of a person and a dragon would frame the person and a shin).
 		const Anatomy& body = spec.anchor == Anchor::kSubject ?
 			(spec.onNpc ? a_subjects.npc : a_subjects.player) :
 			(a_subjects.npc.extent >= a_subjects.player.extent ? a_subjects.npc : a_subjects.player);
@@ -1488,8 +1192,8 @@ namespace SD::Camera
 			(a_subjects.playerHead.z + a_subjects.npcHead.z) * 0.5f
 		};
 
-		// The base direction is from the subject toward the person they are
-		// talking to — look back along it and you see their face.
+		// The base direction runs from the subject toward the person they're talking
+		// to; looking back along it shows their face.
 		const float lineSide = ShotAngles::LineSide(a_subjects.side, spec.onNpc, a_subjects.true180);
 		bool       ok = false;
 		const auto toOther = Normalized(
@@ -1501,93 +1205,137 @@ namespace SD::Camera
 		const float separation = Length(
 			RE::NiPoint3{ other.x - subject.x, other.y - subject.y, other.z - subject.z });
 
-		// The move, eased across the life of the shot and scaled by the player's
-		// movement dial.
+		// Close-ups frame the face (see FaceFrame.h). The eyeline stays measured
+		// between the stable points, so the line doesn't move with a head. What moves
+		// is the point this shot stands off from and aims at, plus how far the bearing
+		// turns toward the face and how far the camera drops for a lowered face (both
+		// decided at the cut and held).
+		const auto& face = spec.onNpc ? a_subjects.npcFace : a_subjects.playerFace;
+		const bool  faced = a_subjects.followFace && face.valid && FollowsFace(a_type);
+		RE::NiPoint3 framed = subject;
+		float        faceYaw = 0.0f;
+		float        facePitch = 0.0f;
+		if (faced) {
+			framed = subject + face.offset;
+			if (a_subjects.heldFaceYaw > kUnheld && a_subjects.heldFacePitch > kUnheld) {
+				faceYaw = a_subjects.heldFaceYaw;
+				facePitch = a_subjects.heldFacePitch;
+			} else {
+				const auto bias = FaceFrame::BiasFor({ toOther.x, toOther.y, toOther.z },
+					{ face.facing.x, face.facing.y, face.facing.z });
+				faceYaw = bias.yaw;
+				facePitch = bias.pitch;
+			}
+		}
+		const auto stampFace = [&](Pose& a_pose) {
+			a_pose.faceYaw = faced ? faceYaw : kUnheld;
+			a_pose.facePitch = faced ? facePitch : kUnheld;
+		};
+
+		// How much a placement is worth for where it stands relative to the face (see
+		// Subjects::avoidBackOfHead): 1 in front or beside, falling toward zero
+		// behind. Only for setups aimed at their subject.
+		const auto facingWorth = [&](const Pose& a_pose) {
+			if (!a_subjects.avoidBackOfHead || spec.aim != Aim::kSubject) {
+				return 1.0f;
+			}
+			RE::NiPoint3 forward = face.valid ? face.facing :
+				(spec.onNpc ? a_subjects.npcForward : a_subjects.playerForward);
+			forward.z = 0.0f;
+			RE::NiPoint3 toCamera{ a_pose.position.x - subject.x, a_pose.position.y - subject.y, 0.0f };
+			bool forwardOk = false;
+			bool cameraOk = false;
+			forward = Normalized(forward, forwardOk);
+			toCamera = Normalized(toCamera, cameraOk);
+			if (!forwardOk || !cameraOk) {
+				return 1.0f;
+			}
+			const float dot = forward.x * toCamera.x + forward.y * toCamera.y;
+			return dot >= 0.0f ? 1.0f : std::max(0.05f, 1.0f + dot * 1.5f);
+		};
+
+		// The move, eased over the life of the shot.
 		const float p = Ease(a_subjects.progress);
 
-		// The shot's own glass. Falling back to whatever the player is running
-		// means a shot with no opinion still composes against the right frame.
-		// Clamped to the range DistanceForFill actually solves over, BEFORE the
-		// distance is taken from it.
-		//
-		// That function clamps its own argument to 40-120 internally, so a base
-		// lens below 40 — now reachable, since the extreme close-up sits exactly on
-		// 40 and a preset may bias downward from there — would have the standoff
-		// solved for one field of view and the frame rendered at another. The
-		// subject comes out larger than the fill asked for, which for the tightest
-		// setup in the table means straight through the distance floor.
-		//
-		// The post-move clamp below stays wider on purpose: a zoom is allowed to
-		// narrow the RENDERED lens past this, because by then the standoff is
-		// already fixed and magnifying is the whole point.
-		// The setup's live field of view, which is its authored one until somebody
-		// moves it. The "shot has no opinion, use the player's own FOV" branch that
-		// used to sit here is gone: every entry in the table names a real lens from
-		// the palette, so it was unreachable.
+		// The setup's live field of view, clamped to the range DistanceForFill solves
+		// over before the distance is taken from it; otherwise the standoff would be
+		// solved for one FOV and rendered at another. The post-move clamp below is
+		// wider on purpose, since a zoom may narrow the rendered lens once the
+		// standoff is fixed.
 		float lens = static_cast<float>(
 			std::clamp(Shot::Lens(a_type), kMinLens, kMaxLens));
 
-		// What this build wants doing differently. A humanoid gets 1.0, 1.0, 0 and
-		// nothing below changes for it — this is the path every ordinary
-		// conversation takes and the table was authored against it exactly.
+		// Per-build adjustments. A humanoid gets 1.0, 1.0, 0, which changes nothing.
 		const auto tuning = Tuning(body.build);
 
-		// Distance is solved at the shot's BASE lens, before any zoom is applied,
-		// so a zoom magnifies away from the size the shot asked for rather than
-		// starting somewhere else and arriving at it.
+		// Distance is solved at the base lens, before any zoom, so a zoom magnifies
+		// away from the size the shot asked for. The fill is capped per build (0.85 on
+		// a dragon would frame the underside of its jaw).
 		//
-		// The fill is capped by the build. This is what answers the reported shot:
-		// kExtremeClose asks for 0.85 of frame height, which is a face cropped
-		// below the chin on a person and the underside of the jaw on a dragon.
+		// The extreme close-ups are measured against the head (kHeadShare of the
+		// extent) rather than head and shoulders, so they actually crop below the
+		// chin.
+		Anatomy sized = body;
+		if (a_type == ShotType::kExtremeClose || a_type == ShotType::kExtremeClosePlayer) {
+			sized.extent *= kHeadShare;
+		}
 		float distance = DistanceForFill(
-			std::min(spec.fill, tuning.fillCap), lens, a_subjects.aspect, body);
+			std::min(spec.fill, tuning.fillCap), lens, a_subjects.aspect, sized);
 
-		// Scaled with the subject, because rise is in WORLD UNITS — and then held
-		// back by the build, because it should not scale all the way. Everything
-		// else in the table is a fraction or a degree and scales itself; this
-		// column and this column alone is absolute.
+		// Rise is in world units, so it scales with the subject, but only partly, by
+		// the build's riseScale. Everything else in the table is relative.
 		float rise = spec.rise * body.scale * tuning.riseScale;
 
-		// HELD UNDER THE CEILING THAT WAS ACTUALLY MEASURED.
-		//
-		// Only upward. A low angle ducking below the eyeline has a floor to worry
-		// about, and the floor is where the people are standing — it cannot be a
-		// surprise the way a beam over a bed alcove can.
-		//
-		// riseScale above stays exactly as it is. It is a FRAMING judgement — a
-		// dragon reads better from at or below its head, whatever the room allows —
-		// and this is a physical limit. Rolling one into the other is how a
-		// framing constant came to be the only thing keeping the camera indoors.
+		// Drop for a lowered face, by the height that puts the lens on its line.
+		if (faced) {
+			rise += distance * std::sin(facePitch * kDeg);
+		}
+
+		// Clamped under the measured ceiling. Upward only: a low angle's floor is
+		// where the people are standing. riseScale is a framing choice; this is a
+		// physical limit.
 		if (rise > 0.0f && a_subjects.ceiling > 1.0f) {
 			constexpr float kCeilingMargin = 24.0f;
 			rise = std::min(rise, std::max(a_subjects.ceiling - kCeilingMargin, 0.0f));
 		}
 
-		// Stepped further off the eyeline on a long head. Signed with the angle so
-		// a shot that already steps left steps further left rather than crossing.
+		// Step further off the eyeline for a long head, signed with the angle so it
+		// never crosses.
 		float angle = spec.angleDeg +
 			(spec.angleDeg < 0.0f ? -tuning.angleBias : tuning.angleBias);
 		float aimLift = 0.0f;
 
-		// THE MOVE IS THE PLAYER'S, NOT THE TABLE'S.
-		//
-		// The table still chooses what each setup ships doing, and that default is
-		// what AuthoredMove restores — but what runs here is whatever is configured.
-		// The amount is a 0-100 strength against this move's own full travel, so
-		// switching a setup from a push to an orbit keeps its intensity, and a
-		// locked setup switched to anything at all actually moves. Under the old
-		// scheme it did not: a locked setup carries an authored amount of zero, and
-		// the zoom override had to smuggle in a hardcoded 0.12 to paper over it.
-		const Move  move = Shot::MoveOf(a_type);
-		const float travel = FullScale(move) *
-			(static_cast<float>(Shot::MoveAmount(a_type)) / 100.0f);
+		// Turn toward where the face points. toOther is turned by angle * lineSide, so
+		// the face yaw is applied the same way and stays on the allowed side of the
+		// line.
+		if (faced) {
+			angle += faceYaw * lineSide;
+			if (a_subjects.enforceLine) {
+				angle = std::clamp(angle, kLineFloorSubject, ShotAngles::kLineCeiling);
+			}
 
-		// World-unit moves scale with the subject for the same reason rise does.
-		// Fractions and degrees are already relative and must not be touched.
+			// Never below the floor the subject stands on (subject is the stable head
+			// point, eyeHeight above the root).
+			const float ground = subject.z - body.eyeHeight;
+			rise = std::max(rise, ground + 30.0f * body.scale - framed.z);
+		}
+
+		// The move is the configured one, not the table's. The amount is 0-100 of this
+		// move's full travel, so switching move types keeps the intensity. Unless this
+		// shot has a move override (the persuasion beat's push).
+		const bool  overridden = a_subjects.moveOverride != Move::kCount;
+		const Move  move = overridden ? a_subjects.moveOverride : Shot::MoveOf(a_type);
+		const float strength = overridden ?
+			std::clamp(a_subjects.moveOverrideStrength, 0.0f, 1.0f) :
+			static_cast<float>(Shot::MoveAmount(a_type)) / 100.0f;
+		const float travel = FullScale(move) * strength;
+
+		// World-unit moves scale with the subject, like rise. Fractions and degrees
+		// are already relative.
 		const float units = travel * body.scale * tuning.riseScale;
 
 		// Signed lateral slide, applied after the aim is composed. Zero for every
-		// other move. See the note where it is used.
+		// other move.
 		float truck = 0.0f;
 
 		switch (move) {
@@ -1601,22 +1349,14 @@ namespace SD::Camera
 		case Move::kTiltUp:    aimLift = units * p;             break;
 		case Move::kTiltDown:  aimLift = -units * p;            break;
 
-		// An orbit arcs the camera around the subject while still pointing at them.
-		// That is what the angle already does — it is the direction from the anchor
-		// out to the camera — so an orbit is a change to it over the life of the
-		// shot, and the aim recomposes from the new position automatically.
-		//
-		// kDrift is the same move without a stated direction, kept so saved configs
-		// keep working.
+		// An orbit arcs around the subject while still pointing at them, which is just
+		// a change of angle over the shot. kDrift is the same move without a
+		// direction, kept so saved configs still work.
 		case Move::kDrift:
 		case Move::kOrbitRight: angle += travel * p;            break;
 		case Move::kOrbitLeft:  angle -= travel * p;            break;
 
-		// A slide does NOT recompose. Deferred out of this switch entirely because
-		// it is the one move that cannot be expressed as a change to the standoff,
-		// the rise, the angle or the lens — those all feed a pose that is then
-		// aimed at the subject, and the whole point of a slide is that the aim
-		// stays put while the camera leaves.
+		// A slide doesn't re-aim, so it's applied after composition (ApplyTruck).
 		case Move::kTruckLeft:  truck = -units * p;             break;
 		case Move::kTruckRight: truck = units * p;              break;
 		default:                                                break;
@@ -1625,25 +1365,21 @@ namespace SD::Camera
 		lens = std::clamp(lens, 30.0f, 120.0f);
 		pose.lens = lens;
 
-		// An over-the-shoulder has to stand beyond the other person, or there is no
-		// shoulder in the corner of the frame to justify the name.
+		// An over-the-shoulder has to stand beyond the other person, or there's no
+		// shoulder in frame.
 		if (spec.overShoulder) {
 			distance = std::max(distance, separation + 60.0f);
 		}
 
-		// Where the camera STANDS and what it POINTS AT are two questions now.
-		// They used to be one — a 90-degree lateral was the only way to ask for
-		// the midpoint, which meant "frame both of them" could not be requested
-		// without also standing side-on.
-		const RE::NiPoint3 anchorPoint = spec.anchor == Anchor::kSubject ? subject : midpoint;
-		const RE::NiPoint3 aimPoint = spec.aim == Aim::kSubject ? subject : midpoint;
+		// Where the camera stands and what it points at are set separately.
+		const RE::NiPoint3 anchorPoint = spec.anchor == Anchor::kSubject ? framed : midpoint;
+		const RE::NiPoint3 aimPoint = spec.aim == Aim::kSubject ? framed : midpoint;
 		const RE::NiPoint3 target{ aimPoint.x, aimPoint.y, aimPoint.z + 3.0f + aimLift };
 
 		if (a_subjects.protectSubject) {
-			// Compose and verify each bearing before choosing it. A blocked roomy
-			// angle must not hide a readable neighbour of the same enabled setup.
-			// Keep this branch separate so saved legacy placement retains its exact
-			// bundle scoring and hold-placement behavior.
+			// Compose and verify each bearing before choosing it, so a blocked angle can't
+			// hide a readable neighbour of the same setup. Kept separate so saved legacy
+			// placement keeps its exact bundle scoring and hold behavior.
 			const bool held = a_subjects.heldSweep > kUnheld;
 			const bool check = !held || a_subjects.checkVisibility;
 			SightContext localContext{};
@@ -1694,18 +1430,19 @@ namespace SD::Camera
 					}
 					const float sight = check ?
 						0.8f * result.visibility.face + 0.2f * result.visibility.torso : 1.0f;
-					result.quality = Score(wanted, use, sight, offset);
+					result.quality = Score(wanted, use, sight, offset) * facingWorth(result);
+					stampFace(result);
 					return result;
 				};
-				// The stable placement anchor and the final optical sightline differ,
-				// especially during a slide. Test the actual requested pose first.
-				// A proposal ray through harmless foreground must never veto it.
+				// The placement anchor and the final sightline differ, especially during a
+				// slide, so test the actual pose first. A proposal ray through harmless
+				// foreground never vetoes it.
 				const float room = held && a_subjects.holdPlacement && a_subjects.heldRoom > kUnheld ?
 					a_subjects.heldRoom : kOpenRoom;
 				auto candidate = compose(room >= kOpenRoom ? wanted : room, room);
 				if (held) {
-					// Placement is deliberately retained even on a blocked/unknown
-					// reading so Director can time a cut without camera pumping.
+					// Placement is kept even on a blocked or unknown reading, so the Director can
+					// time a cut without the camera pumping.
 					return candidate;
 				}
 				if ((candidate.visibility.state != SightState::kClear ||
@@ -1726,8 +1463,7 @@ namespace SD::Camera
 					bestScore = candidate.quality;
 					best = candidate;
 				}
-				// The bounded sweep costs at most nine placements. A near-perfect
-				// admitted angle already beats any materially different composition.
+				// At most nine placements. A near-perfect angle already beats any other.
 				if (bestScore >= 0.985f) {
 					break;
 				}
@@ -1735,48 +1471,20 @@ namespace SD::Camera
 			return best.valid ? best : rejected;
 		}
 
-		// The room, not the people.
-		//
-		// This is the placement the mod did not have. Every other setup here hangs
-		// off somebody's head node and can only ever be a different radius around
-		// it; these start from the direction the space actually opens in, stand off
-		// in it, and let the participants land where they land in the frame.
-		//
-		// angleDeg is read differently on this path — degrees off the OPEN
-		// direction rather than off the eyeline — so several room shots can look
-		// at the same conversation from genuinely different corners instead of all
-		// lining up along the one open axis.
-		//
-		// The 180-degree rule is deliberately not applied. These are establishing
-		// shots with no subject to be on the wrong side of, and forcing them onto
-		// the sanctioned side would throw away half the room.
+		// Room shots: stand off in the direction the space opens up and let the people
+		// fall where they fall. angleDeg is relative to the open direction here, so
+		// several room shots look from different corners. The 180-degree rule doesn't
+		// apply: there's no subject to be on the wrong side of.
 		if (spec.anchor == Anchor::kScene) {
-			// What the framing wants, capped by what the room actually has. The
-			// ceiling matches DistanceForFill's: outdoors and in the big interiors
-			// the probe returns real distance and a long lens gets to use it, while
-			// a corridor still reports a corridor and pulls the shot in.
+			// What the framing wants, capped by the room. Same ceiling as DistanceForFill,
+			// so outdoors a long lens gets real distance while a corridor still pulls the
+			// shot in.
 			const float reach = std::clamp(std::min(distance, a_subjects.openDistance * 0.9f),
 				200.0f, 2400.0f);
 
-			// Try the swung angle first, then walk back toward the open direction.
-			//
-			// The swing is what stops the long lens standing in the same spot every
-			// time it is chosen. This is the one axis in the mod where the camera had
-			// no reason to be anywhere in particular: the open direction is a
-			// measurement rather than a composition, so every room shot lining up
-			// along it meant the widest setups all shared one vantage point.
-			//
-			// Walked back rather than simply refused, because the open direction is
-			// where the room demonstrably IS. A sixty-degree swing may well face a
-			// wall, and giving up there would make the setting look like it disabled
-			// the shot rather than moved it.
-			// A room shot stands where the space opens, at its own authored angle
-			// off that direction, and that is now the whole of it.
-			//
-			// The randomised swing this used to walk back through is gone with
-			// iRoomSwing; the loop stays as a loop of one so the held-angle
-			// bookkeeping below is identical on both paths and there is one shape to
-			// reason about rather than two.
+			// A room shot stands where the space opens, at its own angle off that
+			// direction. Kept as a one-element loop so the held-angle bookkeeping matches
+			// the other path.
 			const std::array<float, 1> swings{
 				a_subjects.heldSweep > kUnheld ? a_subjects.heldSweep : 0.0f
 			};
@@ -1803,9 +1511,8 @@ namespace SD::Camera
 				pose.room = RememberRoom(a_subjects, room.distance, room.clear);
 				pose.valid = true;
 
-				// A room shot is about the space, so a body crossing it costs less
-				// than it would on a single — but both people still have to be
-				// visible in it or it is a wide shot of a wall.
+				// A body crossing a room shot costs less than on a single, but both people
+				// still have to be visible.
 				const float sight = Visibility(pose, subject, other, spec, truck, a_subjects);
 				pose.quality = Score(reach, use, room.clear * sight, swing);
 				return pose;
@@ -1814,11 +1521,9 @@ namespace SD::Camera
 			return pose;
 		}
 
-		// Sweep for an angle with room, keeping the subject the size the shot asked
-		// for. Distance is only reduced as a last resort, and never past the floor.
-		//
-		// Search only small adjustments around this shot's intended bearing.
-		// The same hard limit applies with the line rule on or off.
+		// Sweep for an angle with room, keeping the size the shot asked for. Distance
+		// is only reduced as a last resort and never past the floor. Only small
+		// adjustments around the intended bearing, line rule on or off.
 		const float lineFloor = spec.anchor == Anchor::kMidpoint ?
 			kLineFloorMidpoint : kLineFloorSubject;
 
@@ -1828,14 +1533,9 @@ namespace SD::Camera
 		RE::NiPoint3 bestDirection = RotateAboutZ(toOther, angle * kDeg * lineSide);
 
 		if (a_subjects.heldSweep > kUnheld) {
-			// The shot already chose its angle. Whether the room along it is
-			// re-measured is now the player's call — see Subjects::holdPlacement —
-			// but the CHOICE is not remade either way. See Subjects::heldSweep.
-			//
-			// Left on, re-measuring is what solves the standoff against a room that
-			// has since changed, and what refuses the shot when somebody has stood
-			// in it. Turned off, both of those stop happening on purpose: the shot
-			// holds the frame it cut on.
+			// The angle was already chosen at the cut. Hold Placement decides whether the
+			// room along it is re-measured (see Subjects::holdPlacement); the angle itself
+			// isn't re-chosen either way.
 			bestOffset = a_subjects.heldSweep;
 			bestDirection = RotateAboutZ(toOther, (angle + bestOffset) * kDeg * lineSide);
 			const Room held = RoomHere(a_subjects, anchorPoint, bestDirection, rise, distance,
@@ -1843,18 +1543,10 @@ namespace SD::Camera
 			bestRoom = held.distance;
 			bestClear = held.clear;
 		} else {
-			// BEST, NOT FIRST-THAT-FITS, and the early break is gone with it.
-			//
-			// The old loop stopped at the first bearing with enough room, which is
-			// the same "accept anything legal" the picker did one level up: a
-			// bearing that clears by a unit with a railing across half the frame
-			// ended the search, and the bearing a few degrees on with the whole
-			// room in front of it was never measured. Scoring makes that visible,
-			// so it is worth the remaining probes to find it.
-			//
-			// The budget is bounded the other way instead: candidates are
-			// de-duplicated by ShotAngles, so a setup pinned near the floor
-			// probes four or five bearings rather than nine.
+			// Best, not first that fits: the first bearing with barely enough room could
+			// have a railing across half the frame while the next one is clear. Candidates
+			// are de-duplicated by ShotAngles, so a setup near the floor probes only a few
+			// bearings.
 			ShotAngles::Candidates candidates{};
 			const std::size_t                     count =
 				ShotAngles::MakeCandidates(angle, lineFloor, a_subjects.enforceLine, candidates);
@@ -1881,44 +1573,23 @@ namespace SD::Camera
 				}
 			}
 
-			// Nothing placed. Fall through to the refusal below with bestRoom still
-			// zero rather than reporting the last measurement, which would let a
-			// blocked bearing past the floor test on its own numbers.
+			// Nothing placed. Fall through to the refusal with bestRoom still zero.
 			if (bestScore < 0.0f) {
 				bestRoom = 0.0f;
 			}
 		}
 
-		// Nowhere in the sweep has room for this shot without putting the lens
-		// inside somebody. Refusing is correct — the caller will try a tighter one,
-		// and a tighter shot needs less room, so the search converges.
-		//
-		// On a HELD angle this is also the escape hatch: if the one direction the
-		// shot committed to becomes genuinely blocked, refusing hands the director
-		// its remembered pose, which holds still. That is the right failure. The old
-		// behaviour — quietly re-solving to whichever neighbour had room this frame
-		// — is the swinging itself.
+		// No bearing has room without putting the lens inside someone. Refuse; the
+		// caller tries a tighter shot, which needs less room. On a held angle this
+		// also hands the Director its remembered pose, which holds still instead of
+		// swinging to a neighbour.
 		if (bestRoom < body.minDistance) {
 			return pose;
 		}
 
-		// A max, not a clamp, AND THAT IS A BUG FIX RATHER THAN A TIDY-UP.
-		//
-		// This was std::clamp(min(distance, bestRoom), body.minDistance, distance),
-		// whose bounds can invert. DistanceForFill floors `distance` at
-		// body.minDistance, but the move applied above scales it back DOWN: a
-		// push-in takes up to forty per cent off, so a setup solving near the floor
-		// arrives here asking for less than it. kCloseLow is the worked example —
-		// 0.66 fill on a 60-degree lens solves to about 100 units against a floor
-		// of 68, and Amount at 100 on the Shots page takes it to 60. The clamp is
-		// then called with lo=68 and hi=60, which the standard leaves undefined and
-		// a checked build asserts on.
-		//
-		// The upper bound was never load-bearing: min(distance, bestRoom) cannot
-		// exceed `distance`, so that arm of the clamp was unreachable in every case
-		// where the bounds were valid. Dropping it changes no result — including in
-		// the inverted case, where MSVC's release clamp returns lo and so does this
-		// — and leaves the floor saying the one thing it was there to say.
+		// A max, not std::clamp: a push-in can bring `distance` below the floor, which
+		// would invert the clamp's bounds (undefined behaviour). The upper bound was
+		// never reachable anyway.
 		const float use = LimitStandoff(a_subjects,
 			std::max(std::min(distance, bestRoom), body.minDistance));
 
@@ -1934,12 +1605,12 @@ namespace SD::Camera
 		pose.standoff = use;
 		pose.room = RememberRoom(a_subjects, bestRoom, bestClear);
 		pose.valid = true;
+		stampFace(pose);
 
-		// Scored against what the shot ASKED for, not against what it settled on.
-		// `use` is already the compromise; measuring it against itself would give
-		// every placement full marks and there would be nothing to choose between.
-		const float sight = Visibility(pose, subject, other, spec, truck, a_subjects);
-		pose.quality = Score(distance, use, bestClear * sight, bestOffset);
+		// Scored against what the shot asked for, not what it settled on, or every
+		// placement would get full marks.
+		const float sight = Visibility(pose, framed, other, spec, truck, a_subjects);
+		pose.quality = Score(distance, use, bestClear * sight, bestOffset) * facingWorth(pose);
 		return pose;
 	}
 

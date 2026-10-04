@@ -27,9 +27,12 @@ No ESP or Papyrus scripts. Nothing is written to your save.
 - [Changes](CHANGELOG.md)
 - [Publish source](LICENSING.md)
 
-Version 1.4.8 adds the True 180 Rule, reaction shots and a hold after voiced
-player lines, all off by default. The build and 17 tests pass. The reported
-dialogue exit/re-entry control lock remains unresolved.
+Version 1.5.0 can film other NPCs' conversations (by key, or automatically when
+you stand still), put subtitles inside the black bar, and hold a close-up on the
+answer to a persuasion check. Close-ups follow the face, NPCs put down their
+work to talk, and the extreme close-ups are tighter. Presets can be exported
+and installed as files, so they can be shared as their own mods. The build and
+24 tests pass.
 
 ## License
 

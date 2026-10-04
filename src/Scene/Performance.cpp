@@ -34,14 +34,10 @@ namespace SD::Scene
 		bool  wantHoldFace{ true };
 		constexpr float intensityScale = ExpressionProfiles::kIntensity;
 
-		// Nodes whose draw flags this mod raised, and what they held before.
-		//
-		// Restoring the exact previous value rather than clearing the bits is not
-		// fussiness. kAlwaysDraw and kHighDetail are both flags other mods set on
-		// heads for their own reasons — a face-light mod, a head-mesh replacer, an
-		// LOD tweak — and clearing them unconditionally at the end of every
-		// conversation would break those quietly, for the rest of the run, in a way
-		// that would never be traced back to a camera mod.
+		// Nodes whose draw flags this mod raised, and what they held before. The exact
+		// previous value is restored rather than the bits cleared, because other mods
+		// (face lights, head mesh replacers, LOD tweaks) set the same flags for their
+		// own reasons.
 		struct HeldNode
 		{
 			RE::NiPointer<RE::NiAVObject> node{};
@@ -51,40 +47,22 @@ namespace SD::Scene
 		std::vector<HeldNode> heldNodes{};
 		Log::OnceFlag         holdReported;
 
-		// The face node the hold was rooted at, kept so a swap can be noticed.
-		//
-		// The player's head is not a fixed object for the length of a conversation.
-		// Measured 2026-08-10: in two of four conversations the engine destroyed and
-		// rebuilt it mid-exchange — twice over inside one of them — while a headgear
-		// mod took a helmet off. The rebuilt node arrives without the flags raised
-		// below, heldNodes goes on pointing at a corpse, and ReleaseHeldNodes ends
-		// the conversation by restoring a node that is no longer in the scene. The
-		// hold silently stops holding anything, which is the exact condition
-		// bHoldPlayerFace exists to prevent.
-		//
-		// It read as a mystery for a week because the FaceGen probe latches the same
-		// pointer once and counts a rebuilt head as a head that stopped updating.
-		// Comparing this against GetFaceNodeSkinned() each tick is what separates
-		// the two.
+		// The face node the hold was rooted at, so a swap can be noticed. The engine
+		// can destroy and rebuild the player's head mid-conversation (for example when
+		// a headgear mod removes a helmet); the new node arrives without the flags and
+		// heldNodes would point at a dead node. Compared against GetFaceNodeSkinned()
+		// each tick.
 		RE::NiPointer<RE::BSFaceGenNiNode> heldRoot{};
 
-		// The two flags worth raising, and why these two.
-		//
-		// kAlwaysDraw (1 << 11) takes the node out of the culling decision, which
-		// is the decision the reported behaviour points at: a head the camera is
-		// not looking at is a head the engine has no reason to morph.
-		//
-		// kHighDetail (1 << 24) covers the other reading of the same observation —
-		// that the gate is a level-of-detail choice rather than a visibility one.
-		// Nobody has separated the two, and there is no cost to raising both: they
-		// are draw hints on a single head for the length of a conversation.
+		// kAlwaysDraw (1 << 11) takes the node out of culling; kHighDetail (1 << 24)
+		// covers the case where the gate is a level-of-detail choice instead. Both are
+		// draw hints on one head for the length of a conversation.
 		constexpr std::uint32_t kHoldFlags =
 			static_cast<std::uint32_t>(RE::NiAVObject::Flag::kAlwaysDraw) |
 			static_cast<std::uint32_t>(RE::NiAVObject::Flag::kHighDetail);
 
-		// The asymmetry that makes an exchange read as two people rather than two
-		// headtrack targets: the listener holds eye contact, the speaker looks away
-		// while assembling a sentence. Equal values collapse the model into a stare.
+		// The listener holds eye contact more than the speaker, who looks away while
+		// putting a sentence together. Equal values turn it into a stare.
 		float listenerHold{ 0.82f };
 		float speakerHold{ 0.48f };
 
@@ -163,14 +141,9 @@ namespace SD::Scene
 			return process ? process->high : nullptr;
 		}
 
-		// Is a voice line playing on this actor right now?
-		//
-		// soundHandles only. Deliberately NOT voiceState or voiceTimeElapsed: those
-		// sit at 0x000 and 0x014 beside currentShout and voiceRecoveryTime and
-		// belong to the shout system, which is why the face probe prints them as a
-		// flat zero through every line ever logged here. voiceTimer is no better —
-		// measured, it holds a constant for an entire session rather than counting
-		// down a line.
+		// Is a voice line playing on this actor? soundHandles only. voiceState and
+		// voiceTimeElapsed belong to the shout system, and voiceTimer holds a constant
+		// rather than counting down a line.
 		[[nodiscard]] bool VoiceHandlePlaying(RE::Actor* a_actor)
 		{
 			auto* high = HighOf(a_actor);
@@ -199,12 +172,8 @@ namespace SD::Scene
 			}
 		}
 
-		// Raise the draw flags on a node and everything under it.
-		//
-		// The whole subtree, not just the face node: the morph lands on the head's
-		// geometry, and a culling decision is taken per drawn object. Raising the
-		// flag on the parent alone leaves the children to be culled on their own
-		// merits, which is the case that matters here.
+		// Raise the draw flags on a node and everything under it. Culling is decided
+		// per drawn object, so the parent alone isn't enough.
 		void HoldSubtree(RE::NiAVObject* a_object)
 		{
 			if (!a_object) {
@@ -233,11 +202,9 @@ namespace SD::Scene
 			heldRoot.reset();
 		}
 
-		// Keep the player's head drawable for the length of the conversation.
-		//
-		// Refuses in first person for the obvious reason: forcing the third-person
-		// head to always draw while the camera is inside it is how a mod gives
-		// someone a view of the back of their own eyeballs.
+		// Keep the player's head drawable for the length of the conversation. Not in
+		// first person, where forcing the head to draw would put it in front of the
+		// camera.
 		void ApplyFaceHold(RE::Actor* a_player)
 		{
 			if (!wantHoldFace || !heldNodes.empty() || !a_player) {
@@ -264,17 +231,10 @@ namespace SD::Scene
 			}
 		}
 
-		// Move the hold onto the new head when the engine swaps one in.
-		//
-		// Cheap enough to run every tick: one virtual call and a pointer compare on
-		// the common path. The subtree walk only happens when the node has actually
-		// changed, which is rare and is precisely the event worth paying for.
-		//
-		// A null target is a real state rather than a failure — first person and a
-		// head with no 3D both land there, and ApplyFaceHold refuses both. Leaving
-		// heldRoot null in that case means the compare mismatches again next tick,
-		// so the hold comes back by itself when the player returns to third person
-		// instead of staying dropped for the rest of the conversation.
+		// Move the hold onto a new head when the engine swaps one in. Cheap on the
+		// common path (one virtual call and a compare). A null target is a normal
+		// state (first person, no 3D); heldRoot stays null so the hold comes back by
+		// itself when the head returns.
 		void RefreshFaceHold(RE::Actor* a_player)
 		{
 			if (!wantHoldFace || !a_player) {
@@ -290,9 +250,9 @@ namespace SD::Scene
 			ReleaseHeldNodes();
 			ApplyFaceHold(a_player);
 
-			// Reported at warn because it is not routine, and because the FaceGen
-			// probe's call counter goes flat on the same frame — without this line
-			// that reads as the player's head having stopped being morphed.
+			// Logged as a warning because the FaceGen probe's call counter goes flat at
+			// the same moment, which would otherwise look like the head stopped being
+			// morphed.
 			if (!heldNodes.empty()) {
 				Log::Warn(Log::Category::kStaging,
 					"The player's face node was replaced mid-conversation; hold re-applied to the new head ({} nodes)."sv,
@@ -306,15 +266,9 @@ namespace SD::Scene
 		bool  probeFace{ false };
 		float probeCountdown{ 0.0f };
 
-		// Sample every frame for the first seconds of a conversation.
-		//
-		// The reported A/B is whether the player's face was visible at the instant
-		// the conversation opened: visible and the mouth animates for that whole
-		// conversation, hidden and it never does. Whatever the engine decides, it
-		// decides there. At 2 Hz that instant is one sample or none, which is why
-		// four sessions of logs have plenty of data either side of it and nothing
-		// at it. The burst falls back to the idle rate afterwards so the rest of
-		// the conversation stays readable.
+		// Sample every frame for the first seconds of a conversation, since that's
+		// when the engine seems to decide whether the player's face animates. Falls
+		// back to the idle rate afterwards.
 		float probeBurst{ 0.0f };
 
 		constexpr float kProbeBurstSeconds = 2.5f;
@@ -322,25 +276,16 @@ namespace SD::Scene
 
 		// The player's phoneme channel, tallied over one conversation.
 		//
-		// This exists because the channel turned out to read INVERTED, and once you
-		// know that it is a usable oracle — which means nobody has to judge a mouth
-		// by eye again, and that is what has cost this investigation every wrong
-		// turn it has taken.
+		// phenomeKeyFrame holds values waiting to be applied: when something applies
+		// the morphs it drains them, otherwise they pile up. So a high reading means
+		// the mouth is not moving. Sample readings:
 		//
-		// phenomeKeyFrame holds values pending application. When whatever applies
-		// the morph is running, it drains them; when it is not, they pile up. So a
-		// HIGH reading means the mouth is NOT moving. Measured 2026-08-03, same
-		// NPC, same session:
+		//   npc, mouth working ...................... mean 0.000
+		//   player, opened facing the camera ........ mean 0.068 (mouth works)
+		//   player, opened facing away .............. mean 0.145 (mouth frozen)
 		//
-		//   npc, mouth demonstrably working ....... mean 0.000  (164 samples)
-		//   player, opened facing the camera ...... mean 0.068  (mouth works)
-		//   player, opened facing away ............ mean 0.145  (mouth frozen)
-		//
-		// The midpoint between the two player cases is ~0.105, and that is the only
-		// justification for the threshold below. It is calibrated on two
-		// conversations with one NPC and should be treated as a smoke alarm, not an
-		// instrument — the numbers are printed alongside it so the verdict can
-		// always be second-guessed from the raw values.
+		// The threshold sits between the two player cases. It's a rough indicator; the
+		// raw numbers are printed with it.
 		struct Tally
 		{
 			std::uint32_t samples{ 0 };
@@ -352,30 +297,14 @@ namespace SD::Scene
 
 		constexpr float kAppliedBelow = 0.105f;
 
-		// What one keyframe channel currently holds.
+		// What one keyframe channel currently holds. count comes from the engine's
+		// struct and is used as a loop bound, so it's clamped (16 phonemes in Skyrim;
+		// 256 is slack).
 		//
-		// count is read from the engine's own struct and used as a loop bound, so
-		// it is clamped. A BSFaceGenAnimationData that is mid-construction, or a
-		// pointer that is not really one, would otherwise walk arbitrary memory —
-		// and this runs on actors the mod has already been told not to touch.
-		// Phonemes number 16 in Skyrim; 256 is slack, not a guess at the real size.
-		//
-		// `readable` is the field that matters and it used to be thrown away.
-		//
-		// Sample returns peak = 0.0f for FOUR different reasons: the channel is
-		// genuinely flat, `values` is null, `count` is zero, or `count` is absurd.
-		// ReportFace logged only the peak, so all four printed as `ph=0.000` and
-		// were indistinguishable. An entire conclusion was built on that ambiguity
-		// — "NPCs lipsync perfectly with the phoneme channel flat at zero", which
-		// retired phenomeKeyFrame as a lead and sent the investigation off toward
-		// BGShkPhonemeController. The NPC reading it rests on is equally consistent
-		// with the channel simply not being readable from here. Log the reason.
-		//
-		// `argmax` because "peak" is a maximum across the channel's slots at one
-		// instant, not a maximum over time, and which slot won is the whole
-		// question when the value is being called a phoneme or a jaw modifier.
-		// Skyrim's modifier set is eyes and brows; the jaw sits on the phoneme
-		// side. A bare max cannot tell a blink from a mouth.
+		// `readable` matters: a peak of 0 can mean a flat channel, a null `values`, a
+		// zero count or an absurd count, and only this tells them apart. `argmax`
+		// records which slot won, since the slot is what says whether it's a phoneme
+		// or a modifier.
 		struct Channel
 		{
 			std::uint32_t count{ 0 };
@@ -405,12 +334,9 @@ namespace SD::Scene
 			return channel;
 		}
 
-		// One channel, rendered so a zero can be argued with.
-		//
-		// `rd=0` means the peak is meaningless. `n` is the slot count, `i` the slot
-		// that won, `up` the engine's own isUpdated flag — which is set by SetValue
-		// and cleared by whoever consumes the keyframe, so watching it flip is how
-		// you find the consumer without hooking anything.
+		// One channel, formatted for the log. rd=0 means the peak is meaningless; n is
+		// the slot count, i the winning slot, up the engine's isUpdated flag (set by
+		// SetValue, cleared by whatever consumes the keyframe).
 		[[nodiscard]] std::string Describe(const Channel& a_channel)
 		{
 			return fmt::format("{:.3f}[rd={} n={} i={} up={}]"sv,
@@ -438,24 +364,11 @@ namespace SD::Scene
 			}
 		}
 
-		// The "two facegen objects per actor" question, settled from the headers.
-		//
-		// It is not two objects, and this no longer needs measuring. vfunc 62
-		// GetFaceNode() is not overridden by Actor, Character or PlayerCharacter;
-		// TESObjectREFR::GetFaceNode delegates straight to GetFaceNodeSkinned
-		// (vfunc 61), which Character does override. So GetFaceNode() and
-		// GetFaceNodeSkinned() return the SAME node for every actor, and an
-		// earlier comment here claiming they "return different pointers on every
-		// sample" was wrong — the probe never logged either pointer, so there was
-		// nothing behind the claim.
-		//
-		// What is still worth logging is the third path: vfunc 63
-		// GetFaceGenAnimationData() hangs off the actor's process data, and
-		// nothing in the headers forces it to be the same instance the node
-		// carries. That comparison is `same=` below. The old log line reported it
-		// as `SAME=`, LIPSYNC.md §3 cites `SAME=yes` as measured — and no such
-		// token exists in this build. It went out with a rewrite and the citation
-		// was never updated, so that row was resting on a deleted instrument.
+		// GetFaceNode() (vfunc 62) isn't overridden by Actor, Character or
+		// PlayerCharacter, and TESObjectREFR's version calls GetFaceNodeSkinned()
+		// (vfunc 61), so both return the same node. The process-side animation data
+		// (vfunc 63) isn't guaranteed to be the same instance as the node's; `same=`
+		// in the log compares them.
 		void ReportFace(std::string_view a_who, RE::Actor* a_actor)
 		{
 			const auto posture = PostureOf(a_actor);
@@ -487,25 +400,9 @@ namespace SD::Scene
 			describe(fromProcess, procPhoneme, procExpression, procModifier);
 			describe(fromNode, nodePhoneme, nodeExpression, nodeModifier);
 
-			// The node's own state, which is where the gate should be.
-			//
-			// BSFaceGenNiNode is what applies the morphs: UpdateDownwardPass
-			// (vfunc 0x2C, overridden) walks animationData onto the head, using
-			// lastTime for its delta and flags for whatever it is allowed to do.
-			//
-			// lastTime reads as the obvious liveness signal and it is not one, at
-			// this sampling rate. Measured over 145 paired samples on disk it was
-			// identical between PLAYER and npc to two decimal places on every
-			// single sample, and advanced at exactly wall-clock rate — it is a
-			// global timestamp, so it can never separate one actor from another by
-			// construction. It froze once, for three samples, on BOTH actors at
-			// once: a global pause, not a per-actor stall.
-			//
-			// Worse, at 2 Hz "it advanced ~0.5" is satisfied by a node that updated
-			// thirty times and by a node that updated once. LIPSYNC.md §3 reads
-			// this field as proof the player's face node is being updated normally.
-			// It is not capable of showing that. Frame-rate resolution, from inside
-			// UpdateDownwardPass itself, is the only thing that would be.
+			// The node's own state. BSFaceGenNiNode::UpdateDownwardPass (vfunc 0x2C)
+			// applies the morphs. lastTime is a global timestamp (identical across
+			// actors), so it can't show whether a particular head is being updated.
 			std::uint16_t nodeFlags = 0;
 			float         nodeLastTime = -1.0f;
 			if (node) {
@@ -514,65 +411,26 @@ namespace SD::Scene
 				nodeLastTime = runtime.lastTime;
 			}
 
-			// The face node's NiAVObject flags, in full.
-			//
-			// Only bit 0 (APP_CULLED) was ever read, off the skinned node, and it
-			// read 0 on all 290 samples on disk — so "the head was not culled" is
-			// the one thing it established, and LIPSYNC.md never recorded even
-			// that. The bits that matter for whether a downward pass reaches this
-			// node at all are the selective-update ones (0x02/0x04/0x08/0x10), and
-			// they were never looked at. Log the whole word.
-			//
-			// Note these are NOT the flags the write-up calls "the face node's
-			// flags". PLAYER 0x003C / NPC 0x001C come from
-			// BSFaceGenNiNode::RUNTIME_DATA::flags — a uint16 at runtime+0x38 with
-			// no enum anywhere in CommonLibSSE. Two different fields, similar
-			// values, and the doc conflates them. `fg=` is the facegen one, `av=`
-			// the NiAVObject one.
+			// The face node's full NiAVObject flags. The selective-update bits
+			// (0x02/0x04/0x08/0x10) matter for whether a downward pass reaches it. These
+			// are different from BSFaceGenNiNode::RUNTIME_DATA::flags (a uint16 at
+			// runtime+0x38): `fg=` in the log is that one, `av=` is this one.
 			const std::uint32_t nodeAvFlags = node ? node->GetFlags().underlying() : 0u;
 			const std::uint32_t nodeCulled = node ? ((nodeAvFlags & 1u) ? 1u : 0u) : 2u;
 
-			// Whether the process-side object and the node-side object are one.
+			// Whether the process-side object and the node-side object are the same.
 			const bool sameObject = fromProcess && fromNode && fromProcess == fromNode;
 
-			// The geometry of the reported behaviour, quantified.
+			// Geometry for the log:
 			//
-			// 2026-08-03: the lips move when the camera is on the player's face and
-			// stop when it is at their back. The screenshots also show the head
-			// plainly RENDERED in the failing case, in frame, so this is not
-			// culling — `culled` read 0 on every sample ever taken, which agreed
-			// and was not weighted properly.
-			//
-			// `facing` is the dot of the actor's own heading with the direction
-			// from them to the camera: +1 is the camera dead in front of their
-			// face, -1 is directly behind their head. If the phoneme channel goes
-			// quiet as this crosses zero, the correlation is in the log rather than
-			// in a screenshot, and the sign tells us which way round.
-			//
-			// `dist` is there to separate orientation from proximity, since the two
-			// move together in an over-the-shoulder shot and nothing so far has
-			// told them apart.
-			// `body` was the first attempt and it measured the wrong thing.
-			//
-			// It dotted the actor's GetAngleZ heading against the direction to the
-			// camera. During a conversation the player's BODY barely turns — they
-			// face the NPC throughout — so it mostly reported where SD had put the
-			// camera along the player/NPC axis, and it read positive through two
-			// runs the reporter had deliberately set up as opposites. Kept because
-			// it is free and because knowing it does NOT separate the cases is
-			// itself worth recording.
-			//
-			// `inView` is the one that answers the question: the camera's own
-			// forward vector against the direction from the lens to the HEAD node.
-			// +1 is the head dead ahead of the lens, 0 is edge of frame, negative
-			// is behind the camera entirely. Unambiguous, and it needs no guess
-			// about which way a head node's axes point.
-			//
-			// `headFwd` is the face-toward-lens reading, taken from the head node
-			// rather than the body so headtracking is included. Column 1 of a
-			// Skyrim node's rotation is its forward, the same convention ApplyPose
-			// relies on for the camera. Treat the sign as unverified until it is
-			// seen to move with something known.
+			//   body    - the actor's heading against the direction to the camera.
+			//             Mostly reflects where the camera sits along the player/NPC
+			//             axis, since the body barely turns during a conversation.
+			//   inView  - the camera's forward against the direction from the lens to
+			//             the head node: +1 dead ahead, 0 at the edge, negative behind.
+			//   headFwd - the head node's forward (column 1) against the direction to
+			//             the lens, so head tracking is included.
+			//   dist    - separates orientation from proximity.
 			float body = -2.0f;
 			float inView = -2.0f;
 			float headFwd = -2.0f;
@@ -610,31 +468,11 @@ namespace SD::Scene
 				}
 			}
 
-			// Does the engine think this actor is voicing a line?
-			//
-			// This is the thing that has never been looked at, and in hindsight it
-			// should have been first. Everything so far measured the FACE — the
-			// morph pass, the keyframes, the node flags — and found the player's
-			// face healthy and simply not moving. So the question is not what the
-			// face does with a lipsync track; it is whether the engine ever had one
-			// for the player at all.
-			//
-			// The measured asymmetry that points here: the NPC's phoneme keyframe
-			// is rewritten every single frame (isUpdated true on 100% of morph-pass
-			// calls) while the player's is stale and untouched. Something drives
-			// the NPC's channel continuously and nothing drives the player's.
-			//
-			// DBVO does not use the dialogue path. It plays lines with the console
-			// command `Player.SpeakSound "DBVO/<pack>/<line>.fuz"`, verified from
-			// the string table of DBVO_Script_MCM.pex. The .fuz carries an embedded
-			// .lip track, so the data exists — the question is whether SpeakSound
-			// registers a voice line on the actor the way the dialogue system does,
-			// and whether that registration survives whatever SD is doing.
-			//
-			// voiceState / soundHandles / voiceTimer are the engine's own record of
-			// exactly that. If the player's is empty while their audio is audible,
-			// the lipsync system was never given anything to play, and no amount of
-			// work on the face will matter.
+			// Does the engine think this actor is voicing a line? DBVO plays lines with
+			// `Player.SpeakSound "DBVO/<pack>/<line>.fuz"` rather than the dialogue path,
+			// so this checks whether the engine registered a voice line on the player at
+			// all. voiceState, soundHandles and voiceTimer are the engine's record of
+			// that.
 			std::uint32_t voiceState = 0xFFFFFFFFu;
 			float         voiceTimer = -1.0f;
 			float         voiceElapsed = -1.0f;
@@ -661,12 +499,8 @@ namespace SD::Scene
 				}
 			}
 
-			// The engine's per-frame morph budget, free to read and never looked at.
-			//
-			// uiNumActorsAllowedToMorph defaults to 10 and caps at 64, and the
-			// candidate set is built by distance. In a 3,632-mod profile with
-			// followers in frame it is not obviously generous. If this number moves
-			// when the shot changes, that is the mechanism and no hook is needed.
+			// The engine's per-frame morph budget (uiNumActorsAllowedToMorph, default 10,
+			// max 64), chosen by distance.
 			std::uint32_t morphBudget = 0;
 			bool          morphEmotions = false;
 			if (auto* faceGen = RE::BSFaceGenManager::GetSingleton()) {
@@ -696,10 +530,8 @@ namespace SD::Scene
 				morphBudget);
 		}
 
-		// One step of the gaze model.
-		//
-		// a_holdBias is the fraction of the time this character should be looking
-		// at the other: high while listening, lower while speaking.
+		// One step of the gaze model. a_holdBias is the fraction of the time this
+		// character looks at the other: high while listening, lower while speaking.
 		void StepGaze(RE::Actor* a_actor, Gaze& a_gaze, float a_delta, float a_holdBias)
 		{
 			auto* high = HighOf(a_actor);
@@ -712,9 +544,7 @@ namespace SD::Scene
 				const bool wantAvert = NextUnit() > a_holdBias;
 
 				if (wantAvert) {
-					// A glance away, not a turn of the head — small, and more often
-					// sideways or down than up, which is where people actually look
-					// when they are thinking.
+					// A glance, not a head turn: small, and more often sideways or down than up.
 					const float lateral = (NextUnit() - 0.5f) * 90.0f;
 					const float vertical = (NextUnit() - 0.75f) * 40.0f;
 					a_gaze.offset = { lateral, lateral * 0.4f, vertical };
@@ -727,7 +557,7 @@ namespace SD::Scene
 				}
 			}
 
-			// Ease toward the wanted offset so the eyes travel rather than teleport.
+			// Ease toward the wanted offset so the eyes travel rather than jump.
 			auto&       live = high->headTrackTargetOffset;
 			const float k = std::clamp(a_delta * 6.0f, 0.0f, 1.0f);
 			live.x += (a_gaze.offset.x - live.x) * k;
@@ -738,9 +568,8 @@ namespace SD::Scene
 
 	void Performance::Configure(bool a_expressions, bool a_gaze)
 	{
-		// Configuration I/O stays on the game thread, never in the face morph hook.
-		// Missing profile keys use built-in defaults so old installations need no
-		// INI replacement. SD_user.ini can override any individual profile field.
+		// Config I/O stays on the game thread, never in the morph hook. Missing keys
+		// use built-in defaults, and SD_user.ini can override any profile field.
 		playerUpperFace.profiles = ExpressionProfiles::Defaults();
 		for (std::size_t i = 0; i < playerUpperFace.profiles.size(); ++i) {
 			auto& profile = playerUpperFace.profiles[i];
@@ -758,7 +587,7 @@ namespace SD::Scene
 		cinematicListening.store(Config::Bool("Performance", "bCinematicListening", true), std::memory_order_relaxed);
 		wantExpressions.store(a_expressions, std::memory_order_relaxed);
 		wantGaze = a_gaze;
-		// Expression profiles do not depend on mouth animation being enabled.
+		// Expression profiles don't depend on mouth animation being enabled.
 		if (a_expressions) FaceGen::Install();
 	}
 
@@ -780,7 +609,7 @@ namespace SD::Scene
 			const auto serial = LipSync::PlayerLineSerial();
 			if (playerTalking && (!playerExprWasTalking || serial != playerLineSerial)) {
 				const auto topic = LipSync::PlayerLineText();
-				// Clause planning owns text interpretation; no borrowed NPC emotion.
+				// Clause planning interprets the text; no borrowed NPC emotion.
 				const Reading reading{ kNeutral, 0 };
 				ApplyPlayerReading(reading,
 					topic.empty() ? "speaking, no topic text"sv : "speaking, text cues"sv, topic);
@@ -791,8 +620,8 @@ namespace SD::Scene
 				if (!npcTalking) SetReading(npcExpression, { kNeutral, 0 }, kReactionScale);
 				playerLineSerial = serial;
 			}
-			// Keep the just-spoken emotion while settling. The next NPC response
-			// supplies a new listener reaction; do not resurrect its previous line.
+			// Keep the just-spoken emotion while settling. The next NPC response supplies
+			// a new listener reaction.
 		}
 		playerExprWasTalking = playerTalking;
 		if (!driving) playerLineEmotion.store(kNeutral, std::memory_order_relaxed);
@@ -803,7 +632,7 @@ namespace SD::Scene
 			face.quietFor = attentive ? 0.0f : face.quietFor + delta;
 			Shape target{};
 			if (driving) {
-				// Brief speech-state gaps must not pump the expression in and out.
+				// Brief gaps in speech mustn't pump the expression in and out.
 				const float gain = LineGain(face.age, face.quietFor < 0.25f);
 				for (std::size_t i = 0; i < kSlots; ++i) target[i] = face.base[i] * gain;
 			}
@@ -821,8 +650,8 @@ namespace SD::Scene
 			}
 			return any;
 		};
-		// Full-face acting is permitted only in a silent NPC-listening interval.
-		// A voice start clears it immediately instead of fading through lip closures.
+		// Full-face acting only during a silent NPC-listening interval. A voice start
+		// clears it immediately instead of fading through lip closures.
 		const bool listenerActive = playerListener.Step(delta, playerUpperFace.reading,
 			playerUpperFace.age, scale, playerUpperFace.listening && npcTalking,
 			playerTalking || !playerUpperFace.listening, driving && cinematicListening.load(std::memory_order_relaxed));
@@ -837,16 +666,16 @@ namespace SD::Scene
 				playerUpperFace.beatIndex + 1, Acting::Name(beat.action), playerUpperFace.age, playerUpperFace.duration);
 		}
 		if (driving) playerLineEmotion.store(playerUpperFace.reading.emotion, std::memory_order_relaxed);
-		// Publish the zero endpoint too, so the final residual is not parked on the head.
+		// Publish the zero endpoint too, so the last residual isn't left on the head.
 		const bool playerActive = driving || moving || wasMoving;
 		const bool npcActive = advance(npcExpression, npc.get(), npcTalking || playerTalking);
-		// No engine calls under this lock: the render hook only copies 17 floats.
+		// No engine calls under this lock; the render hook only copies 17 floats.
 		{
 			const std::lock_guard lock(expressionMutex);
 			publishedUpperFace = playerUpperFace.motion.current;
 			publishedRegionalFace = playerUpperFace.regionalMotion.current;
-			// Native-listener suppression is eased at the target above. Publishing
-			// a hard zero here would bypass that smoothing at both handoff edges.
+			// Native-listener suppression is already eased above; publishing a hard zero
+			// here would skip that smoothing.
 			publishedListener = playerListener.current;
 			publishedListenerActive = listenerActive;
 			publishedNpc = npcExpression.current;
@@ -926,9 +755,7 @@ namespace SD::Scene
 			return;
 		}
 
-		// Loud, and it says what to look at. A diagnostic that needs the log read
-		// to know whether it engaged is a diagnostic that gets misread — the same
-		// note SetForcedViseme carries, for the same reason.
+		// Logged as a warning so it's obvious when it's active.
 		Log::Warn(Log::Category::kStaging,
 			"FORCED EXPRESSION {}: pinning that slot to 1.0 on the player every frame. "
 			"Look at the player's face in third person - it should be visibly stuck in that "
@@ -955,9 +782,7 @@ namespace SD::Scene
 		playerGaze = {};
 		engaged = true;
 
-		// The player's face starts this conversation with no opinion. Carrying the
-		// last one over would open every conversation on a reaction to a line from
-		// the previous one — and with a rebuilt head, on a stale target as well.
+		// Start each conversation without a reaction carried over from the last one.
 		playerReaction = {};
 		playerExprWasTalking = false;
 		playerUpperFace.Begin({}, true, {});
@@ -982,7 +807,7 @@ namespace SD::Scene
 
 		ApplyFaceHold(RE::PlayerCharacter::GetSingleton());
 
-		// Open the dense sampling window on the event under test.
+		// Open the dense sampling window.
 		probeBurst = kProbeBurstSeconds;
 		probeCountdown = 0.0f;
 	}
@@ -991,9 +816,7 @@ namespace SD::Scene
 	{
 		wantHoldFace = a_hold;
 
-		// Turning it off mid-conversation puts the head back immediately rather
-		// than waiting for the conversation to end, so the menu toggle is a live
-		// A/B on the thing it controls instead of a setting for next time.
+		// Turning it off mid-conversation restores the head immediately.
 		if (!wantHoldFace) {
 			ReleaseHeldNodes();
 		} else if (engaged) {
@@ -1008,20 +831,13 @@ namespace SD::Scene
 		}
 		engaged = false;
 
-		// Hand the face and the eyes back exactly as they were found. An
-		// expression left overridden follows the NPC around for the rest of the
-		// session, which is the sort of bug that gets blamed on a body mod.
-		// Before anything else, and unconditionally: the head goes back exactly as
-		// it was found. A conversation that ends by any route — menu close, combat,
-		// a cell change, the subject dying — must not leave draw flags raised on
-		// the player for the rest of the session.
+		// Restore the head first, unconditionally, however the conversation ended
+		// (menu close, combat, cell change, the subject dying). Expressions and eyes
+		// are handed back as they were found.
 		ReleaseHeldNodes();
 
-		// The verdict for this conversation, in one line.
-		//
-		// Printed whenever the probe gathered anything, so a run can be scored from
-		// the log without anyone watching a mouth. See the Tally comment for why a
-		// LOW number is the good one.
+		// The result for this conversation, in one line (a low number is good; see
+		// Tally).
 		if (playerPhonemes.samples > 0) {
 			const float mean = playerPhonemes.sum / static_cast<float>(playerPhonemes.samples);
 			Log::Info(Log::Category::kStaging,
@@ -1036,8 +852,8 @@ namespace SD::Scene
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		auto  npc = npcHandle.get();
 
-		// Let the player's envelope finish fading through UpdateFace. The NPC
-		// leaves our morph hook at End(), so release its owned override now.
+		// The player's envelope finishes fading through UpdateFace. The NPC leaves the
+		// morph hook at End(), so release its override now.
 		if (npcExpression.ownsOverride) ClearFace(npc.get());
 		npcExpression = {};
 		{
@@ -1082,12 +898,12 @@ namespace SD::Scene
 		std::uint16_t a_percent, std::string_view a_text)
 	{
 		if (!engaged || !a_speaker || a_speaker != npcHandle.get().get()) return;
-		// Retain readings while disabled, so switching expressions on can react
-		// to the current line without waiting for another response.
+		// Keep readings while disabled, so turning expressions on can react to the
+		// current line.
 		LipSync::OnResponse();
 		playerExprWasTalking = false;
-		// Preserve authored NPC emotion. Neutral NPC records no longer acquire
-		// a full-face override merely because their line mentions a loaded word.
+		// Keep the authored NPC emotion. Neutral records don't get a full-face
+		// override just because the line contains an emotional word.
 		const Reading reading = a_emotion > kNeutral && a_emotion <= kPuzzled && a_percent > 0 ?
 			Reading{ a_emotion, std::min<std::uint16_t>(a_percent, 100), false } : Reading{ kNeutral, 0 };
 		SetReading(npcExpression, reading, 1.0f);
@@ -1105,18 +921,9 @@ namespace SD::Scene
 		probeCountdown = 0.0f;
 	}
 
-	// Every change of the player's voice sound handle, at frame rate.
-	//
-	// The 2 Hz probe cannot tell a handle that was DROPPED from a line that was
-	// SHORT, and that distinction is the entire hypothesis: the failing case shows
-	// the engine holding a voice sound on the player for a fraction of the time it
-	// does in the working case, but line lengths differ and a sampled fraction
-	// cannot separate the two.
-	//
-	// So this watches for transitions rather than sampling levels. Each one prints
-	// the sound ID and how long the previous one was held, continuously, to the
-	// millisecond. A line that plays to completion and one that is cut off look
-	// nothing alike in that record.
+	// Every change of the player's voice sound handle, at frame rate. The 2 Hz
+	// probe can't tell a dropped handle from a short line; logging transitions
+	// (sound ID and how long the previous one was held) can.
 	void WatchVoice(float a_delta)
 	{
 		static std::uint32_t lastSound = 0xFFFFFFFFu;
@@ -1154,7 +961,7 @@ namespace SD::Scene
 			return;
 		}
 
-		// Ahead of the countdown: this one is per frame, not twice a second.
+		// Before the countdown: this one runs every frame.
 		WatchVoice(a_delta);
 
 		probeBurst = std::max(0.0f, probeBurst - a_delta);
@@ -1163,13 +970,12 @@ namespace SD::Scene
 		if (probeCountdown > 0.0f) {
 			return;
 		}
-		// Zero rather than a small interval: the next frame's subtraction takes it
-		// negative, so the burst samples at whatever rate the game is running.
+		// Zero rather than a small interval, so the burst samples at the game's frame
+		// rate.
 		probeCountdown = probeBurst > 0.0f ? 0.0f : kProbeIdleInterval;
 
-		// Deliberately does NOT require `engaged`. With [Direction] bEnabled=0 the
-		// director never opens, so Engage never runs — and that configuration is
-		// precisely the control this probe exists to measure.
+		// Doesn't require `engaged`: with bEnabled=0 the director never opens, and
+		// that's the control case this probe is for.
 		ReportFace("PLAYER"sv, RE::PlayerCharacter::GetSingleton());
 		if (a_npc) {
 			ReportFace("npc"sv, a_npc);
@@ -1188,37 +994,22 @@ namespace SD::Scene
 			return;
 		}
 
-		// The probe used to run here and no longer does — see Performance::Probe.
-		// Driven from Director::Tick instead, so it still reports when SD is
-		// staging nothing at all, which is the control case.
-
-		// Ahead of the gaze early-return, deliberately. The head hold is not part
-		// of the gaze model and has to survive bGaze=0.
+		// Before the gaze early-return: the head hold isn't part of the gaze model.
 		RefreshFaceHold(player);
 
 		if (!wantGaze) {
 			return;
 		}
 
-		// THE PLAYER LOOKS AT WHOEVER THEY ARE TALKING TO.
-		//
-		// a_npcSpeaking is false for the whole of the player's own voiced line —
-		// the engine's dialogue state is blank throughout it — so the player was
-		// falling to speakerHold and glancing away for roughly half of every line
-		// they delivered. Looking away while you talk is a real thing people do,
-		// but not when the camera has cut to your face for the delivery, and not on
-		// every line.
-		//
-		// Read from the sound handle here rather than passed in, so this holds with
-		// the topic fade off, with synthesized lipsync off, and with any player
-		// voice mod: the handle is the one signal that does not depend on some
-		// other feature being switched on.
+		// The player looks at whoever they're talking to while delivering a line. The
+		// engine's dialogue state is blank during the player's own voiced line, so the
+		// sound handle is checked directly; it works with any voice mod and any other
+		// settings.
 		const bool playerTalking = VoiceHandlePlaying(player);
 
 		if (playerTalking && !playerWasTalking) {
-			// Mid-glance when the line starts. Waiting for the current aversion to
-			// expire would leave the head turned away for up to 1.8s of it, which
-			// is most of a short line.
+			// Cancel a glance in progress when the line starts, or the head could stay
+			// turned away for most of a short line.
 			playerGaze.offset = {};
 			playerGaze.averted = false;
 			playerGaze.remaining = 0.0f;

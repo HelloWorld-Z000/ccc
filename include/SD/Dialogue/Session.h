@@ -2,7 +2,7 @@
 
 namespace SD::Dialogue
 {
-	// One spoken line, resolved at the moment it starts.
+	// One spoken line, resolved when it starts.
 	struct Line
 	{
 		RE::FormID  topicInfoID{ 0 };
@@ -10,20 +10,17 @@ namespace SD::Dialogue
 		std::string speakerName;
 		std::string text;
 
-		// The direction signal. Every authored response in the game carries an
-		// emotion and an intensity, because the engine uses them to drive facegen.
-		// Nothing has ever used them to choose a shot.
+		// Every authored response carries an emotion and an intensity (the engine uses
+		// them for facegen); the director uses them to choose shots.
 		RE::EmotionType emotion{ RE::EmotionType::kNeutral };
 		std::uint16_t                     emotionPercent{ 0 };
 
-		// A topic info can hold several responses spoken back to back. Vanilla does
-		// not expose which one is playing through the manager, so the director sees
-		// the group as one line for now; this count is how the log reports when that
-		// approximation is about to be wrong.
+		// A topic info can hold several responses spoken back to back, and the manager
+		// doesn't expose which one is playing, so the group is treated as one line.
+		// This count shows in the log when that matters.
 		std::size_t responseCount{ 0 };
 
-		// Authored staging that no mod has ever read: the animation the speaker and
-		// the listener are meant to play on this line.
+		// Authored idles for the speaker and listener on this line.
 		bool hasSpeakerIdle{ false };
 		bool hasListenIdle{ false };
 
@@ -33,12 +30,7 @@ namespace SD::Dialogue
 	};
 
 	// Watches MenuTopicManager and turns it into conversation and line edges.
-	//
-	// v0 is deliberately observational — nothing here moves a camera. It exists so
-	// that every signal the director will be built on can be checked against a
-	// running game first. Prisma stalled because a frontend was built on a frame
-	// source that turned out not to exist; proving the source before building on
-	// it is the cheap version of that lesson.
+	// Observational only; nothing here moves the camera.
 	class Session
 	{
 	public:
@@ -50,36 +42,16 @@ namespace SD::Dialogue
 		[[nodiscard]] bool            Active() const noexcept { return active; }
 		[[nodiscard]] RE::ActorHandle Partner() const noexcept { return partner; }
 
-		// WHICH CONVERSATION THIS IS, counted from load. Bumped by Enter().
-		//
-		// The partner's form id was the only identity a conversation had, and it is
-		// not one: two conversations with the same person in a row are the same id,
-		// and Runtime — which opens the camera once per partner and deliberately
-		// will not reopen while that key matches — could not tell them apart.
-		//
-		// That is the whole of the reported "activate somebody who is already
-		// talking and the conversation does not start properly". Leaving a
-		// conversation while the NPC is still speaking keeps this session alive on
-		// MenuTopicManager::lastSpeaker, which is correct — the line is still
-		// running and cutting away from a farewell is the worst thing this mod can
-		// do. Walk back and activate them again inside that window and the engine
-		// starts a genuinely new conversation, but nothing here changed: same
-		// speaker, same id, session already active. Runtime saw its key still
-		// matching and never staged, so the second conversation ran with no camera,
-		// no bars and a topic list nothing was driving.
-		//
-		// A serial makes the identity a conversation rather than a person.
+		// Which conversation this is, counted from load; bumped by Enter(). The
+		// partner's form ID can't tell two conversations with the same person apart
+		// (leave while they're still talking, then talk to them again), so Runtime
+		// keys on this as well.
 		[[nodiscard]] std::uint32_t ConversationSerial() const noexcept { return serial; }
 
-		// IS THE PLAYER STILL IN THIS CONVERSATION, as opposed to standing outside
-		// one that has not finished talking at them?
-		//
-		// Active() is true for both, and has to be: cutting away from a farewell is
-		// the worst thing a dialogue camera can do, so the tail keeps the session
-		// alive. This is the narrower question, and the one that decides whether a
-		// cinematic suspended for an inventory or a barter window is owed a return.
-		// Come back from a trade the player ended by walking out and the answer is
-		// no — there is a line still running, and nothing left to frame it for.
+		// Is the player still in this conversation, as opposed to standing outside one
+		// that's still talking at them? Active() is true for both (the farewell tail
+		// keeps the session alive). This decides whether a conversation suspended for
+		// a trade is owed a return.
 		[[nodiscard]] bool PlayerEngaged() const noexcept { return engaged; }
 		[[nodiscard]] bool        Speaking() const noexcept { return speaking; }
 		[[nodiscard]] const Line& Current() const noexcept { return current; }
@@ -99,30 +71,18 @@ namespace SD::Dialogue
 		RE::ActorHandle   partner{};
 		std::uint32_t     serial{ 0 };
 
-		// THE TWO HALVES OF "IS THE PLAYER ACTUALLY IN THIS CONVERSATION".
+		// MenuTopicManager has two speaker handles: `speaker` is live participation,
+		// `lastSpeaker` is the tail after the player has left.
 		//
-		// MenuTopicManager has two speaker handles and they mean different things.
-		// `speaker` is live participation: the player is in the conversation and
-		// the engine is holding it open for them. `lastSpeaker` is the tail — the
-		// player has left and the NPC is finishing whatever they were part way
-		// through saying.
-		//
-		// Collapsing the two, which is what this used to do, is right for keeping a
-		// session alive across a farewell and wrong for everything else, because it
-		// makes the end of a conversation and the middle of one indistinguishable.
-		//
-		//   hadLive   this session has been observed with a live speaker at least
-		//             once, so it is a conversation the player entered rather than
-		//             a forcegreet observed from its trailing line.
+		//   hadLive   this session has had a live speaker at least once (the player
+		//             entered it, rather than a forcegreet seen from its tail).
 		//   lostLive  ...and has since lost it. A live speaker arriving while this
-		//             is set is the player starting a NEW conversation with
-		//             somebody who never stopped talking from the last one.
+		//             is set is the player starting a new conversation with someone
+		//             who never stopped talking.
 		bool hadLive{ false };
 		bool lostLive{ false };
 
-		// This frame's answer to PlayerEngaged. Written every frame the session is
-		// alive rather than kept as an edge, so a caller asking on any frame gets
-		// the state as it is rather than as it last changed.
+		// This frame's PlayerEngaged value, written every frame the session is alive.
 		bool engaged{ false };
 		float             lineElapsed{ 0.0f };
 		float             sessionElapsed{ 0.0f };

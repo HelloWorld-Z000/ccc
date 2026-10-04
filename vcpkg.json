@@ -1,7 +1,7 @@
 {
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
     "name": "scene-director",
-    "version-string": "1.4.8",
+    "version-string": "1.5.0",
     "description": "Scene Director - cinematic dialogue staging and shot direction for Skyrim.",
     "license": "GPL-3.0-or-later",
     "dependencies": [

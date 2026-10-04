@@ -4,8 +4,8 @@
 
 namespace SD::Config
 {
-	// Check the three INI revisions once, then reuse native read results for
-	// this batch. Nested batches share the snapshot. Menu writes invalidate it.
+	// Checks the three ini revisions once, then reuses native read results for the
+	// batch. Nested batches share the snapshot; menu writes invalidate it.
 	class ReadScope
 	{
 	public:
@@ -13,47 +13,28 @@ namespace SD::Config
 	private:
 		SettingsCache::Scope scope;
 	};
-	// An absolute path to something under the game's Data, for the profile API.
-	//
-	// Exported because SD's own three ini files are no longer the only ones read
-	// under Data: Compat::ImprovedCamera reads ANOTHER mod's config at load, so it
-	// can name that mod's one incompatible setting rather than leave the player to
-	// discover it in a conversation.
-	//
-	// Goes through the same exe-derived root the settings do, and returns wide, for
-	// the reasons Config.cpp gives at length — a relative path sends the profile
-	// API to the WINDOWS directory, and a narrowed one mangles any install path
-	// the user's ANSI codepage cannot represent. Both failures are silent. Empty
-	// in, or an unknowable root, gives empty out; callers check.
+	// An absolute path to something under the game's Data folder, for the profile
+	// API. Used to read Improved Camera's config as well as SD's own files. Built
+	// from the same exe-derived root as the settings and returned wide (see
+	// Config.cpp). Empty in, or an unknown root, gives empty out.
 	[[nodiscard]] std::wstring DataPath(std::wstring_view a_relative);
 
-	// Settings, read from whichever source is actually present.
-	//
-	// MCM Helper writes the player's choices to Data/MCM/Settings/SceneDirector.ini
-	// and is consulted first. When it is absent — or has no value for a key yet —
-	// the mod's own SKSE/Plugins/SD.ini answers instead.
-	//
-	// The point of the order is that neither is a dependency: Scene Director ships
-	// an MCM for people who have MCM Helper and a plain ini for people who do not,
-	// and behaves identically either way.
+	// Settings, read from whichever source has them: MCM Helper's
+	// Data/MCM/Settings/SceneDirector.ini first, then SD_user.ini, then
+	// SKSE/Plugins/SD.ini. Neither MCM Helper nor the menu is required.
 	[[nodiscard]] int  Int(const char* a_section, const char* a_key, int a_default);
 	[[nodiscard]] bool Bool(const char* a_section, const char* a_key, bool a_default);
 
-	// Text values. Only one setting needs these — the preset an ini-only player
-	// asks for by name — but a number could not carry it: preset keys are a
-	// shipped contract and an ordinal would silently point at a different preset
-	// the moment the list was reordered.
+	// Text values. Only used for the preset requested by name in the ini; an index
+	// would point at a different preset if the list were reordered.
 	[[nodiscard]] std::string String(const char* a_section, const char* a_key, const char* a_default);
 
-	// Persist a value to SD_user.ini. Used by the in-game menu so a change survives the
-	// session; the live effect is applied separately and immediately, because
-	// waiting for the next conversation to re-read the file would make a slider
-	// feel broken.
+	// Save a value to SD_user.ini. The menu applies the live effect separately, so
+	// a slider doesn't wait for the next conversation.
 	void SetInt(const char* a_section, const char* a_key, int a_value);
 	void SetBool(const char* a_section, const char* a_key, bool a_value);
 	void SetString(const char* a_section, const char* a_key, const char* a_value);
 
-	// Logs which source answered, once, so a setting that appears to do nothing
-	// can be traced to the file it was actually read from.
+	// Logs which source answered, once.
 	void ReportSource();
 }

@@ -21,37 +21,17 @@ namespace SD::Log
 
 	namespace
 	{
-		// NON-ASCII PATHS, AND THE CRASH THEY CAUSED FOR EVERY JAPANESE PLAYER.
-		//
-		// std::filesystem::path::string() converts wide to narrow through the
-		// system ANSI codepage and THROWS std::system_error when a character has no
-		// mapping — "No mapping for the Unicode character exists in the target
-		// multi-byte code page". On a Japanese, Chinese or Korean Windows, the log
-		// directory is under the user's Documents folder and the user folder is
-		// very often their name in their own script, so the very first thing this
-		// plugin did on startup was throw. Before any hook, any conversation, any
-		// camera work. Reported 2026-08, and the same call had already been found
-		// and fixed once in Config.cpp for the settings path — see the long note
-		// there. This is the same bug in the one place that pass did not reach.
-		//
-		// Nothing here can throw now, and that is the more important half of the
-		// fix: a logger is diagnostic equipment. It must never be able to take down
-		// the thing it is supposed to be reporting on, whatever it finds on disk.
+		// Non-ASCII paths. std::filesystem::path::string() converts through the ANSI
+		// codepage and throws std::system_error when a character can't be mapped. On
+		// systems where the user folder name is in a non-Latin script that happened on
+		// startup, before anything else ran. Nothing here can throw: a logger must
+		// never take down what it's logging.
 
-		// A narrow path the ANSI file APIs can actually OPEN, or empty if there
-		// isn't one.
-		//
-		// UTF-8 is the right answer for text and the wrong answer here. spdlog in
-		// this build is a COMPILED library whose filename_t is std::string, so its
-		// file sink opens with the narrow CRT call, which interprets the name in
-		// the ANSI codepage — hand it UTF-8 and it does not throw, it just fails to
-		// find the file. Defining SPDLOG_WCHAR_FILENAMES would fix that properly
-		// and cannot be done from here: it changes filename_t, and the library was
-		// compiled without it.
-		//
-		// So: ask whether the ANSI form round-trips, and if it does not, fall back
-		// to the 8.3 short name, which is ASCII by construction. That is what makes
-		// a log land at all in a folder this process cannot otherwise name.
+		// A narrow path the ANSI file APIs can open, or empty if there isn't one.
+		// spdlog in this build is compiled with std::string filenames and opens files
+		// with the narrow CRT call, so UTF-8 doesn't work here (and
+		// SPDLOG_WCHAR_FILENAMES can't be enabled without rebuilding it). If the ANSI
+		// form doesn't round-trip, fall back to the 8.3 short name, which is ASCII.
 		[[nodiscard]] std::string AnsiPath(const std::wstring& a_path)
 		{
 			if (a_path.empty()) {
@@ -70,10 +50,7 @@ namespace SD::Log
 				::WideCharToMultiByte(CP_ACP, 0, a_wide.c_str(), static_cast<int>(a_wide.size()),
 					out.data(), needed, nullptr, &lossy);
 
-				// `lossy` is the whole test. Any substituted character means the
-				// name no longer addresses the file we were given, and opening it
-				// would either fail or — worse — create a second file beside the
-				// real one under a mangled name.
+				// Any substituted character means the name no longer refers to the file.
 				return lossy ? std::string{} : out;
 			};
 
@@ -81,9 +58,9 @@ namespace SD::Log
 				return direct;
 			}
 
-			// The 8.3 name. Requires the target to exist, which the DIRECTORY does
-			// by this point and the log file may not — so the directory is shortened
-			// and the filename, which this plugin chose and is ASCII, is put back.
+			// The 8.3 name requires the target to exist, which the directory does by now
+			// and the log file may not, so shorten the directory and append the (ASCII)
+			// file name.
 			const std::filesystem::path full{ a_path };
 			const std::wstring          parent = full.parent_path().wstring();
 			if (parent.empty()) {
@@ -128,27 +105,18 @@ namespace SD::Log
 	{
 		auto path = logger::log_directory();
 		if (!path) {
-			// NOT report_and_fail, which puts up a message box and terminates.
-			//
-			// That is for something the plugin cannot run without, and this is a
-			// log file. spdlog keeps a default logger when none is installed, so
-			// every call site stays valid and the mod runs; the player loses the
-			// diagnostics, not the session.
+			// Not report_and_fail, which shows a message box and terminates. spdlog keeps
+			// a default logger, so the mod still runs; only the log is lost.
 			return;
 		}
 
 		*path /= fmt::format("{}.log"sv, a_pluginName);
 
-		// Created before the short-name lookup below, which can only shorten a
-		// directory that exists.
+		// Created before the short-name lookup, which needs the directory to exist.
 		std::error_code error;
 		std::filesystem::create_directories(path->parent_path(), error);
 
-		// Keep one generation back. The log is truncated on every launch, which is
-		// fine right up until the thing being diagnosed is a crash: the player
-		// relaunches to check something and the record of the failed session is
-		// gone. One extra file is the difference between reading what happened and
-		// asking them to reproduce it.
+		// Keep the previous log, so a crash isn't wiped out by the next launch.
 		auto previous = *path;
 		previous.replace_extension(".previous.log");
 		std::filesystem::remove(previous, error);
@@ -159,8 +127,7 @@ namespace SD::Log
 			return;  // nowhere to write that this process can name. Not fatal.
 		}
 
-		// spdlog throws spdlog_ex when a file will not open, and a log that cannot
-		// be created is still not a reason to lose the mod.
+		// spdlog throws when a file won't open; that's not a reason to lose the mod.
 		std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
 		try {
 			sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(openable, true);
@@ -199,11 +166,8 @@ namespace SD::Log
 			return;
 		}
 
-		// Utf8, not path::string(). This line is the second half of the same
-		// crash: the module path is where MO2's virtual Data folder lives, and an
-		// install under a non-ASCII folder threw here even when the log directory
-		// itself was clean. It is text for a human to read, so UTF-8 is exactly
-		// right — and it cannot throw.
+		// Utf8, not path::string(): an install under a non-ASCII folder would
+		// otherwise throw here.
 		Info(Category::kCore, "Loaded from: {}"sv, Utf8(std::wstring{ path.data(), length }));
 	}
 }

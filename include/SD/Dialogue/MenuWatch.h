@@ -2,42 +2,25 @@
 
 namespace SD::Dialogue
 {
-	// An independent read on "is the player in dialogue".
-	//
-	// Session polls MenuTopicManager from inside the camera hook. This watches the
-	// menu stack and is driven by the engine instead, which makes it the control
-	// in the experiment: if a dialogue menu opens and Scene Director's frame count
-	// has not moved since the previous menu event, the frame source is not
-	// per-frame and the hook is wrong — a conclusion the first run's single
-	// "first frame observed" line could not support either way.
-	//
-	// The two sources are also expected to genuinely disagree, and that disagreement
-	// is worth recording: the menu closes while an NPC is still delivering a
-	// farewell, and a forcegreet opens a conversation with no menu at all.
+	// Watches the menu stack, driven by the engine's menu events. Independent of
+	// Session (which polls MenuTopicManager from the tick), and the one part of
+	// the mod that still runs while a pausing menu is open. The two can
+	// legitimately disagree: the menu closes while an NPC is still saying goodbye,
+	// and a forcegreet starts a conversation with no menu.
 	class MenuWatch : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
 		static void Register();
 
-		// A menu that pauses the game is open, so the screen is not this mod's.
-		//
-		// THE ONLY COPY OF THIS ANSWER. It is kept here rather than in the director
-		// because here is the one place still running while the game is paused —
-		// the director's tick is not, which is the whole reason this exists.
-		//
-		// Runtime asks before opening a conversation. Without that a scene staged
-		// on the frame a pausing menu was taking the screen would freeze staged and
-		// hold the topic list hidden for as long as the menu was up.
+		// A screen-owning menu is open. The only copy of this answer, kept here
+		// because the Director's tick doesn't run while the game is paused. Runtime
+		// checks it before opening a conversation.
 		[[nodiscard]] static bool ScreenTaken() noexcept;
 
-		// Drop the record if the engine says nothing is pausing the game.
-		//
-		// Called from the director's tick, which by definition only runs while the
-		// game is running. A record built from paired events can be left holding a
-		// menu whose close was never delivered — a load, a mod force-closing a menu
-		// — and that would be permanent: no conversation would stage again.
-		// numPausesGame is the authority, costs one read, and is asked rather than
-		// trusted to agree.
+		// Drop any recorded menu the UI says is no longer open. A record built from
+		// paired events can be left holding a menu whose close never arrived (a load,
+		// a mod force-closing a menu), which would block staging for good. Called from
+		// the Director's tick.
 		static void Reconcile();
 
 		MenuWatch(const MenuWatch&) = delete;

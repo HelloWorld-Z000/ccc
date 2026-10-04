@@ -16,8 +16,8 @@ namespace SD::Core
 
 		std::array<std::atomic_uint64_t, kSourceCount> counts{};
 
-		// The source currently dispatching. Only one does, so several live hooks
-		// still produce exactly one OnFrame per frame.
+		// The source currently dispatching. Only one does, so several installed hooks
+		// still produce one OnFrame per frame.
 		std::atomic<std::size_t> primary{ kSourceCount };
 
 		constexpr auto kPreferred = static_cast<std::size_t>(Source::kPlayerCharacter);
@@ -25,20 +25,17 @@ namespace SD::Core
 		std::chrono::steady_clock::time_point lastFrame{};
 		bool                                  haveLastFrame{ false };
 
-		// a_delta is the engine's own delta where a source provides one, and 0 where
-		// it does not — in which case wall time fills in.
+		// a_delta is the engine's delta where the source provides one, otherwise 0 and
+		// wall time is used.
 		void Observe(Source a_source, float a_delta)
 		{
 			const auto index = static_cast<std::size_t>(a_source);
 			counts[index].fetch_add(1, std::memory_order_relaxed);
 
-			// Preference, not first-come.
-			//
-			// Measured: ThirdPersonState fires a couple of frames earlier and would
-			// win a race, but it only runs while the third-person camera state is
-			// active — it stops dead in first person and in menus. PlayerCharacter
-			// runs in every state and is the only candidate that carries the engine's
-			// own delta, so it takes the tick over whenever it appears.
+			// Preference, not first come. ThirdPersonState fires slightly earlier but only
+			// runs in the third-person camera state. PlayerCharacter runs in every state
+			// and carries the engine's own delta, so it takes over whenever it's
+			// available.
 			auto current = primary.load(std::memory_order_relaxed);
 			if (current != index) {
 				if (current != kSourceCount && index != kPreferred) {
@@ -59,9 +56,8 @@ namespace SD::Core
 				haveLastFrame = true;
 			}
 
-			// A load screen, an alt-tab or a debugger break produces a delta no
-			// smoothing constant survives. Clamp rather than skip — a skipped frame
-			// leaves pose interpolation stalled, which reads as the camera sticking.
+			// Load screens, alt-tab or a debugger break produce huge deltas. Clamp rather
+			// than skip, since a skipped frame stalls pose interpolation.
 			delta = std::clamp(delta, 0.0f, 0.1f);
 
 			Runtime::OnFrame(nullptr, delta);
@@ -93,9 +89,8 @@ namespace SD::Core
 			{
 				func(a_this, a_next);
 
-				// The pose is written here rather than from the dispatched frame,
-				// and after the original: the game's own camera work has finished
-				// for this state, so this write is the last one and survives.
+				// The pose is written here, after the original: the game's camera work for
+				// this state is done, so this write is the last one.
 				Camera::Director::OnThirdPersonUpdate(a_this);
 
 				Observe(Source::kThirdPersonState, 0.0f);

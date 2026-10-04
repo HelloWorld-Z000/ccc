@@ -10,42 +10,22 @@ namespace SD::Compat
 		bool present{ false };
 		bool asked{ false };
 
-		// WHICH generation answered, because they do not share a config layout.
-		//
-		// Detecting both names and then reading one product's files is how a
-		// diagnostic starts lying: the legacy build has no SKSE\Plugins\
-		// ImprovedCameraSE\ folder at all, so a legacy-only install would have been
-		// told to go and edit a path that does not exist. Null means nothing
-		// matched.
+		// Which generation was found, since they don't share a config layout. Null
+		// means nothing matched.
 		const wchar_t* matched{ nullptr };
 
-		// Detected by loaded module, the same way Conflicts.cpp names its entries
-		// and for the same reason: a plugin handle is load order and means nothing
-		// to a reader, while a file name is something a user can find in their mod
-		// manager and something a bug report can be checked against.
-		//
-		// BOTH SPELLINGS, because the mod has had two lives. The original ships
-		// ImprovedCamera.dll; Improved Camera SE — the rewrite, and what nearly
-		// everybody is actually running, including its NG builds — ships
-		// ImprovedCameraSE.dll. Matching only the newer name would leave anyone on
-		// the older one silently in the fighting path, which is the failure this
-		// whole file exists to end.
+		// Detected by loaded module, like Conflicts.cpp. Both file names: the original
+		// ships ImprovedCamera.dll, Improved Camera SE (and its NG builds) ships
+		// ImprovedCameraSE.dll.
 		constexpr std::array kModules{
 			L"ImprovedCameraSE.dll",
 			L"ImprovedCamera.dll",
 		};
 
-		// WHERE IMPROVED CAMERA KEEPS THE ANSWER, WHICH IS NOT THE FILE NAMED AFTER
-		// IT.
-		//
-		// ImprovedCameraSE.ini is the loader's own config — the window name, the
-		// menu key, the supported exe versions — and the camera settings are not in
-		// it. What it carries is [MODULE DATA] ProfileName, naming a file under
-		// Profiles\ that holds the rest. It ships as Default.ini, and reading that
-		// name rather than assuming it is the difference between diagnosing the
-		// player in front of you and diagnosing a default they are not using.
-		//
-		// The name includes its own extension, so it is appended as-is.
+		// Where Improved Camera keeps its settings. ImprovedCameraSE.ini is the
+		// loader's config; the camera settings are in Profiles\<ProfileName>, where
+		// [MODULE DATA] ProfileName names the file (Default.ini by default). The name
+		// includes its extension.
 		[[nodiscard]] std::wstring ProfilePath()
 		{
 			const auto loader = Config::DataPath(L"SKSE\\Plugins\\ImprovedCameraSE\\ImprovedCameraSE.ini");
@@ -53,13 +33,9 @@ namespace SD::Compat
 				return {};
 			}
 
-			// THE LOADER HAS TO EXIST BEFORE ITS ANSWER MEANS ANYTHING.
-			//
-			// GetPrivateProfileStringW cannot fail here: handed a file that is not
-			// there it returns the default, so "Default.ini" comes back whether the
-			// installation says so or there is no installation of this generation at
-			// all. Without this test the function happily built a plausible path out
-			// of two guesses and the warning below printed it as the file to edit.
+			// Check the loader file exists first: GetPrivateProfileStringW returns the
+			// default when the file is missing, which would produce a plausible but wrong
+			// path.
 			std::error_code ec{};
 			if (!std::filesystem::exists(std::filesystem::path{ loader }, ec) || ec) {
 				return {};
@@ -78,60 +54,31 @@ namespace SD::Compat
 			return Config::DataPath(relative);
 		}
 
-		// THE ONE SETTING THAT DECIDES WHETHER THESE TWO MODS CAN SHARE A CAMERA.
+		// The one setting that decides whether these two mods can share a camera.
 		//
-		// Skyrim takes the player's movement controls away for the length of a
-		// conversation, and that is one of the three tests Improved Camera uses to
-		// decide a camera state is "scripted":
+		// Skyrim disables movement controls during dialogue, which Improved Camera
+		// treats as a "scripted" third-person event:
 		//
 		//     if (Helper::IsScripted() || !controlMap->IsMovementControlsEnabled() ||
 		//         Helper::CorrectFurnitureIdle())
 		//         m_ThirdPersonState = CameraThirdPerson::State::kScriptedEnter;
 		//
-		// So EVERY dialogue in the game is a scripted third-person event to it,
-		// whether or not this mod is installed. That state takes its enable from
-		// [EVENTS] bScripted, and with it on — the shipped default — a player who
-		// was in first person gets Improved Camera's fake first person: it pins the
-		// third-person zoom to its minimum every frame and translates the camera to
-		// the player's head.
+		// With [EVENTS] bScripted on (the default), a first-person player gets
+		// Improved Camera's fake first person during every conversation: it pins the
+		// zoom and moves the camera to the player's head every frame, while this mod
+		// is driving its own shot. The view flips between the two.
 		//
-		// Scene Director spends those same frames driving an absolute world pose
-		// for a shot across the room. Both write the camera, neither yields, and
-		// what the player sees is the view flipping between the angle and their own
-		// eyes — reported as "it zooms in and out repeatedly".
+		// Reported rather than worked around: 1.1.x exposes nothing to negotiate with
+		// (only the SKSE entry points, and it ignores SmoothCam's refusal).
 		//
-		// REPORTED RATHER THAN WORKED AROUND, and that is not laziness. There is
-		// nothing to negotiate with on 1.1.x — measured on 1.1.2.4228, and later
-		// generations are reported to publish one, so keep this scoped when the
-		// support target moves. That build exports only the three SKSE
-		// entry points, and where it does ask SmoothCam for the camera it discards
-		// the answer — the refusal Scene Director's own hold produces is written as
-		// `if (result == OK) {}` and falls through. Backing off on this mod's side
-		// alone would simply mean no cinematic, silently, for a setting the player
-		// does not know is on.
+		// bScripted=0 turns off Improved Camera's handling for the whole
+		// scripted-third-person category, not just dialogue; the warning says so.
 		//
-		// WHAT bScripted=0 ACTUALLY COSTS, stated carefully because the first draft
-		// of this said "conversations only" and that is not true. The key gates
-		// Improved Camera's whole scripted-forced-third-person category — the test
-		// above is three conditions, and dialogue is one of them — so turning it off
-		// gives up its first-person handling for every event in that category, not
-		// just for talking to people. Dialogue is merely the one that collides with
-		// this mod, and the recommendation is worth making on those terms rather
-		// than by understating the price.
-		//
-		// ONLY IN FIRST PERSON. The whole path above is inside `if (m_IsFirstPerson)`,
-		// so a player who plays in third person is not affected and must not be told
-		// they are — a warning that does not apply is how the ones that do get
-		// ignored.
+		// Only relevant in first person, so third-person players aren't warned.
 		void ReportScriptedEvent()
 		{
-			// THE LEGACY BUILD IS NOT ASKED ABOUT THE NG LAYOUT.
-			//
-			// Everything below — the loader file, the Profiles folder, the [EVENTS]
-			// section, the bScripted key — is Improved Camera SE's schema. The
-			// original Improved Camera is a different product with a different
-			// layout, and reading one while detecting the other produces a confident
-			// answer about a file that was never there. Said plainly instead.
+			// The original Improved Camera has a different layout; don't read Improved
+			// Camera SE's schema for it.
 			if (matched && std::wstring_view{ matched } == L"ImprovedCamera.dll") {
 				Log::Warn(Log::Category::kCompat,
 					"This is the original Improved Camera, not Improved Camera SE. Scene Director "
@@ -150,10 +97,8 @@ namespace SD::Compat
 				return;
 			}
 
-			// -1 as the default, because 0 is a real answer here and the absent case
-			// needs telling apart from it: a missing profile means the diagnosis
-			// failed, and reporting that as "configured correctly" would be worse
-			// than saying nothing.
+			// -1 as the default, so a missing key isn't reported as "configured
+			// correctly".
 			const int scripted = ::GetPrivateProfileIntW(L"EVENTS", L"bScripted", -1, profile.c_str());
 
 			if (scripted < 0) {
@@ -181,12 +126,8 @@ namespace SD::Compat
 				"dialogue switch, so its first-person handling goes for every event in that "
 				"category. Dialogue is the one that conflicts here."sv);
 
-			// The path, because the file is not the one named after the mod and a
-			// player told to edit "the Improved Camera ini" will open the wrong one.
-			//
-			// Log::Utf8, never path::string() — see the note on Utf8. This path is
-			// under MO2's virtual Data folder, which is exactly where the non-Latin
-			// crash came from last time.
+			// Log the path, since the file to edit isn't the one named after the mod.
+			// Log::Utf8, never path::string(): this is under MO2's virtual Data folder.
 			Log::Warn(Log::Category::kCompat, "The file to edit is: {}"sv, Log::Utf8(profile));
 		}
 	}
@@ -210,8 +151,7 @@ namespace SD::Compat
 			return;
 		}
 
-		// Said in full at startup, once, so the next report of this arrives already
-		// diagnosed rather than as "the camera zooms in and out".
+		// Logged once at startup in full.
 		Log::Info(Log::Category::kCompat,
 			"Improved Camera is loaded. The third-person zoom will not be written back at the "
 			"end of conversations: that zoom is how Improved Camera moves between first and "

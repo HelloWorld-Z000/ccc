@@ -1,4 +1,4 @@
-# Build output — cmake + vcpkg tree, ~2 GB, regenerable via
+# Build output (cmake + vcpkg tree, ~2 GB). Regenerate with
 # `cmake --preset skyrim && cmake --build build/skyrim --config Release`
 build/
 out/
@@ -6,14 +6,33 @@ out/
 *.user
 CMakeSettings.json
 
-# Release archives and staging folders produced by tools/Package.ps1
+# Release archives, checksums and staging folders from tools/Package.ps1.
+# Release notes in package/ are kept.
 package/*.zip
+package/*.sha256
 package/*/
+package/*.png
+package/*-TEST-NOTES.md
+package/RELEASE-NOTES-1.4.5.md
 
-# Local log captures. The live SceneDirector.log is written to the
-# OneDrive-redirected My Games path, not here.
-logs/*.log
+# Local log captures. The live SceneDirector.log is written to
+# Documents/My Games/Skyrim Special Edition/SKSE, not here.
+logs/
 
-# Claude notes, prompts and settings
-CLAUDE*.md
-.claude/
+# Development notes and research, not part of the source
+HANDOFF.md
+LIPSYNC.md
+PRESET-REBUILD.md
+EXPRESSION-PROFILES.md
+EXPRESSION-RESEARCH.md
+EMOTION-OVERHAUL.md
+REGIONAL-EXPRESSIONS.md
+OBSTRUCTION-DESIGN.md
+UPPER-FACE-DIAGNOSTIC.md
+CINEMATIC-EXPRESSIONS-AND-REACTION-SHOTS.md
+
+# Local diagnostics and asset tools
+config/SD_UpperFaceTest.ini
+tools/*.py
+__pycache__/
+*.pyc

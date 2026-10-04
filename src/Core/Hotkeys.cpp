@@ -12,36 +12,31 @@ namespace SD::Core
 
 		constexpr std::size_t kActions = static_cast<std::size_t>(Action::kCount);
 
-		// DirectX scan codes, which is what the game reports and what every other
-		// SKSE plugin's ini stores. Zero is not a key on any keyboard, so it is the
-		// unassigned sentinel with nothing to disambiguate.
+		// DirectX scan codes, as the game reports them and as SKSE plugins usually
+		// store them. 0 is unassigned.
 		std::array<std::atomic<std::uint32_t>, kActions> bindings{};
 
 		// -1 when nothing is waiting for a key.
 		std::atomic<int>           armed{ -1 };
 		std::atomic<std::uint32_t> caught{ 0 };
 
-		// Which row asked, remembered separately because the sink clears `armed`
-		// at the moment it catches the key and the panel reads the result a frame
-		// later. Only ever one capture in flight — two rows cannot arm at once.
+		// Which row asked, kept separately because the sink clears `armed` when it
+		// catches the key and the panel reads the result a frame later. Only one
+		// capture can be in flight.
 		std::atomic<int> lastArmed{ -1 };
 
 
 		[[nodiscard]] const char* IniKey(Action a_action)
 		{
 			switch (a_action) {
-			case Action::kFraming: return "iKeyFraming";
-			default:               return "iKeyNextAngle";
+			case Action::kFraming:   return "iKeyFraming";
+			case Action::kFilmScene: return "iKeyFilmScene";
+			default:                 return "iKeyNextAngle";
 			}
 		}
 
-		// Escape cancels rather than binding.
-		//
-		// It is the one key every capture widget in every game reserves, and a
-		// player who opens the binding by accident has to be able to get out of it
-		// without either committing something or being stuck. Binding Escape is a
-		// legitimate thing to want and it is still reachable — clear the binding
-		// and it is unassigned, which is what wanting Escape almost always means.
+		// Escape cancels instead of binding, so an accidental capture can be backed
+		// out of.
 		constexpr std::uint32_t kEscape = 0x01;
 
 		class Sink : public RE::BSTEventSink<RE::InputEvent*>
@@ -56,20 +51,20 @@ namespace SD::Core
 			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
 				RE::BSTEventSource<RE::InputEvent*>*) override
 			{
-				// Returns kContinue on every path in this function, including the
-				// early ones. See the note in Hotkeys.h: this sink observes and
-				// never swallows, and that is what keeps it clear of the removed
-				// dialogue input handler.
+				// Every path returns kContinue: this sink observes and never swallows input
+				// (see Hotkeys.h).
 				if (!a_event) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
 
 				const bool capturing = armed.load(std::memory_order_relaxed) >= 0;
 
-				// Ordinary presses only matter while a conversation is being
-				// directed. Capture has to work anywhere, because the settings
-				// panel is most often opened standing in a field.
-				if (!capturing && !Camera::Director::Staging()) {
+				// Normal presses only matter while a conversation is directed. Capture works
+				// anywhere (the panel is usually opened outside a conversation), and so does
+				// the film key, which starts filming.
+				const auto filmKey = bindings[static_cast<std::size_t>(Action::kFilmScene)].load(std::memory_order_relaxed);
+				const bool staged = Camera::Director::Staging();
+				if (!capturing && !staged && filmKey == 0) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
 
@@ -88,22 +83,27 @@ namespace SD::Core
 					}
 
 					if (capturing) {
-						// Recorded, not applied. SetBinding writes the ini and the
-						// input thread is not where a file write belongs, so the
-						// panel picks this up on its next frame.
+						// Recorded, not applied: SetBinding writes the ini, so the panel applies it on
+						// its next frame.
 						static_cast<void>(Hotkeys::OfferKey(code));
 						return RE::BSEventNotifyControl::kContinue;
 					}
 
-					// Compared against the live atomics rather than a cached copy,
-					// so a rebind takes effect on the next press.
+					// Compared against the live atomics, so a rebind applies on the next press.
 					for (std::size_t i = 0; i < kActions; ++i) {
 						if (code != bindings[i].load(std::memory_order_relaxed)) {
 							continue;
 						}
-						switch (static_cast<Action>(i)) {
+						const auto action = static_cast<Action>(i);
+						if (!staged && action != Action::kFilmScene) {
+							continue;
+						}
+						switch (action) {
 						case Action::kFraming:
 							Camera::Director::RequestFraming();
+							break;
+						case Action::kFilmScene:
+							Camera::Director::RequestScene();
 							break;
 						default:
 							Camera::Director::RequestCut();
@@ -119,9 +119,8 @@ namespace SD::Core
 		void ReadBindings()
 		{
 			for (std::size_t i = 0; i < kActions; ++i) {
-				// Clamped to the byte range scan codes occupy, so a garbage value
-				// in a hand-edited ini reads as unassigned rather than as a code
-				// that can never be pressed and never be diagnosed.
+				// Clamped to the scan code byte range, so a garbage value in a hand-edited ini
+				// reads as unassigned.
 				const int stored = Config::Int("Direction", IniKey(static_cast<Action>(i)), 0);
 				bindings[i].store(stored > 0 && stored <= 0xFF ?
 						static_cast<std::uint32_t>(stored) :
@@ -135,10 +134,9 @@ namespace SD::Core
 	{
 		ReadBindings();
 
-		// REGISTERED WHETHER OR NOT ANYTHING IS BOUND, which the previous version
-		// was not. Capture reads the same event stream, and capture has to work
-		// when nothing is bound yet — which is always the first time somebody opens
-		// the page. The cost when idle is one relaxed load and a staging check.
+		// Registered whether or not anything is bound, because capture uses the same
+		// event stream and has to work before the first binding. Idle cost is one
+		// relaxed load and a staging check.
 		auto* manager = RE::BSInputDeviceManager::GetSingleton();
 		if (!manager) {
 			Log::Warn(Log::Category::kCore,
@@ -149,21 +147,15 @@ namespace SD::Core
 		manager->AddEventSink(Sink::GetSingleton());
 
 		if (!AnyBound()) {
-			// Said once, plainly, and this is not a formality.
-			//
-			// The failure this project has hit more often than any other is a
-			// feature that is present, unconfigured, and silent about it — the log
-			// reads as though everything works and the control appears to do
-			// nothing. Both keys ship unassigned because guessing a binding inside
-			// somebody else's load order is worse than asking for one, so the
-			// absence has to announce itself.
+			// Logged once when nothing is bound, since the keys ship unassigned.
 			Log::Info(Log::Category::kCore,
-				"No camera hotkeys assigned. Settings -> Controls, or [Direction] iKeyNextAngle / iKeyFraming."sv);
+				"No camera hotkeys assigned. Settings -> Keys, or [Direction] iKeyNextAngle / iKeyFraming / iKeyFilmScene."sv);
 			return;
 		}
 
-		Log::Info(Log::Category::kCore, "Camera hotkeys listening: next angle {}, framing {}."sv,
-			KeyName(Binding(Action::kNextAngle)), KeyName(Binding(Action::kFraming)));
+		Log::Info(Log::Category::kCore, "Camera hotkeys listening: next angle {}, framing {}, film their conversation {}."sv,
+			KeyName(Binding(Action::kNextAngle)), KeyName(Binding(Action::kFraming)),
+			KeyName(Binding(Action::kFilmScene)));
 	}
 
 	void Hotkeys::Refresh()
@@ -186,10 +178,8 @@ namespace SD::Core
 
 		const auto code = a_code <= 0xFF ? a_code : 0u;
 
-		// THE SAME KEY CANNOT DO TWO THINGS. Taking it from the other action rather
-		// than refusing the bind: the player has just pressed a key while looking
-		// at THIS row, so this row is what they meant, and a refusal reads as the
-		// capture having failed.
+		// A key can only do one thing. Take it from the other action rather than
+		// refusing: the player pressed it while looking at this row.
 		if (code != 0) {
 			for (std::size_t i = 0; i < kActions; ++i) {
 				if (i != index && bindings[i].load(std::memory_order_relaxed) == code) {
@@ -248,17 +238,15 @@ namespace SD::Core
 			return false;
 		}
 
-		// The sink cleared `armed` when it caught the key, so the action has to be
-		// recovered from what the panel last asked for. Kept here rather than
-		// stored alongside the code because there is exactly one capture in flight
-		// at a time — two rows cannot be armed at once.
+		// The sink cleared `armed` when it caught the key, so recover the action from
+		// what the panel last asked for.
 		const int action = lastArmed.exchange(-1, std::memory_order_relaxed);
 		if (action < 0 || static_cast<std::size_t>(action) >= kActions) {
 			return false;
 		}
 
 		if (code == kEscape) {
-			// Cancelled, not bound. Leaves whatever was already there alone.
+			// Cancelled, not bound; the existing binding is left alone.
 			return true;
 		}
 
